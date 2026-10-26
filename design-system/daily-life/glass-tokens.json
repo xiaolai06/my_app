@@ -1,0 +1,103 @@
+{
+  "version": "3.2",
+  "updatedAt": "2026-10-25",
+  "status": "design-starting-values-not-device-validated",
+  "layout": "comfortable-grouped",
+  "primaryDevice": "OPPO Find X9 Pro",
+  "defaultMode": "basic-until-device-validation",
+  "capabilityPolicy": {
+    "basicMinApi": 26,
+    "backdropBlurMinApi": 31,
+    "runtimeShaderRefractionMinApi": 33
+  },
+  "shapeDp": { "card": 24, "filter": 18, "input": 17, "button": 26, "sheet": 28, "navigationTop": 25, "menu": 21, "dateCell": 16 },
+  "coverage": ["task-row", "note-card", "checkbox", "search", "button", "text-field", "setting-row", "select", "switch", "sheet", "toast", "navigation", "menu-option", "date-picker", "month-picker", "time-picker"],
+  "navigation": {
+    "placement": "attached-bottom-with-system-insets",
+    "columns": 5,
+    "labels": ["今天", "记录", "计划", "账本", "功能箱"],
+    "equalWidth": true,
+    "iconAboveLabel": true,
+    "labelsAlwaysVisible": true,
+    "bodyMinimumHeightDp": 76,
+    "itemMinimumHeightDp": 68,
+    "iconSizeDp": 23,
+    "labelSizeSp": 12,
+    "selectedIconPlateDp": { "width": 52, "height": 32 },
+    "crossColumnIndicator": false,
+    "transition": "local-color-glass-rim-and-highlight-fade"
+  },
+  "renderPolicy": "shared-glass-appearance-with-tiered-rendering-cost",
+  "startingValues": {
+    "blurDp": 12,
+    "visualSamplingDisplacementDp": 2,
+    "rimDp": 0.75,
+    "shadowDp": 3,
+    "pressScale": 0.975,
+    "transitionMs": 220,
+    "springDampingRatio": 0.85,
+    "decorativeMotionMaxMs": 0,
+    "chromaticAberration": false
+  },
+  "light": {
+    "tint": "#FFFFFF",
+    "tintTopAlpha": 0.62,
+    "tintBottom": "#F8FCFF",
+    "tintBottomAlpha": 0.4,
+    "rim": "#FFFFFF",
+    "rimAlpha": 0.93,
+    "edge": "#5474A0",
+    "edgeAlpha": 0.15,
+    "selectedTop": "#FFFFFF",
+    "selectedTopAlpha": 0.86,
+    "selectedBottom": "#9FC3F5",
+    "selectedBottomAlpha": 0.53,
+    "popoverBase": "#F3F9FF",
+    "popoverBaseAlpha": 0.82,
+    "scene": ["#A8CEF2", "#C1E1DC", "#D7D4EF"],
+    "sceneAnimated": false
+  },
+  "dark": {
+    "tint": "#3D526F",
+    "tintTopAlpha": 0.66,
+    "tintBottom": "#1D2B40",
+    "tintBottomAlpha": 0.62,
+    "rim": "#D2E7FF",
+    "rimAlpha": 0.32,
+    "edge": "#050F21",
+    "edgeAlpha": 0.38,
+    "selectedTop": "#3B5A80",
+    "selectedTopAlpha": 0.52,
+    "selectedBottom": "#244B80",
+    "selectedBottomAlpha": 0.4,
+    "popoverBase": "#1D2C43",
+    "popoverBaseAlpha": 0.94,
+    "scene": ["#254D7B", "#284C52", "#433D69"],
+    "sceneAnimated": false
+  },
+  "readability": {
+    "minimumTextContrast": 4.5,
+    "minimumMeaningfulNonTextContrast": 3,
+    "requiresCompositedBackgroundValidation": true,
+    "minimumTouchTargetDp": 48,
+    "minimumTaskRowDp": 72
+  },
+  "tiers": {
+    "content": { "rendering": "static-scene-tint-gradient-dual-rim", "realtimeBackgroundSampling": false, "longTextMinimumTintAlpha": 0.82 },
+    "control": { "rendering": "glass-bevel-gradient-local-selection-press", "realtimeBackgroundSampling": false },
+    "floating": { "rendering": "readability-base-and-optional-shared-backdrop", "realtimeBackgroundSampling": "device-validated-only" }
+  },
+  "customPickers": {
+    "systemVisualPicker": false,
+    "menu": { "anchorToTrigger": true, "minimumOptionHeightDp": 50, "selectedCheckmark": true, "keyboardNavigation": true },
+    "date": { "firstDayOfWeek": "Monday", "monthNavigation": true, "yearAndMonthPanel": true, "cancelDoesNotCommit": true, "commit": "explicit-confirm", "minimumCellDp": 48, "gridMinimumAvailableWidthDp": 348, "narrowOrLargeText": "seven-day-list", "todayCue": "underline-and-accessible-label", "eventCue": "dot-and-accessible-label" },
+    "time": { "clock": 24, "hourRange": [0,23], "minuteRange": [0,59], "minuteStep": 1, "minimumOptionHeightDp": 48, "commit": "explicit-confirm" },
+    "focus": "trap-active-layer-and-restore-trigger",
+    "back": "dismiss-top-picker-before-editor",
+    "androidFoundation": "Compose-Popup-Dialog-LazyColumn-selectable-semantics",
+    "androidImplementationStatus": "pending"
+  },
+  "candidateBudget": { "sharedCaptureSourcesPerPage": 1, "activeRealtimeRegions": 2 },
+  "preview": { "file": "daily-glass-refined.html", "renderer": "css", "surfaceBlurPx": 22, "saturation": 1.3, "navigationBlurPx": 16, "calendarGridMinimumContainerPx": 348, "opticalRefraction": false, "samplingPolicyMatchesAndroidBudget": false },
+  "nativeBackendInstalled": false
+}
