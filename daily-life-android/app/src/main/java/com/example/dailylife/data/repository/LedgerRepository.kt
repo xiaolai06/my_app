@@ -31,6 +31,9 @@ class LedgerRepository(val records:RecordsRepository) {
     suspend fun initialize() {
         records.initialize()
         write {
+            // Repair only relationships left by older deletion code; keep import identities for deduplication.
+            dao.removeOrphanBudgetAlerts()
+            dao.repairDeletedImportRows()
             val owner=records.owner()
             if(dao.ledgers().isEmpty()) dao.put(Ledger(ownerId=owner,name="日常",normalizedName="日常",isDefault=true))
             if(dao.categories().isEmpty()) {
@@ -51,8 +54,15 @@ class LedgerRepository(val records:RecordsRepository) {
             dao.put(LedgerDraft(f.id,records.owner(),f.json()))
             if(f.revision>0) records.dao.putLinks(records.dao.linksFor(if(f.kind=="claim") "reimbursement" else "transaction",f.id).map {it.copy(entityType="ledger_draft")})
         }
+        old?.let {LedgerForm.parse(it.payload)} ?: f
     }
-    suspend fun draft(f:LedgerForm)=write {validateDraft(f);require(dao.drafts().any {it.id==f.id&&sameDraftFamily(LedgerForm.parse(it.payload).kind,f.kind)}) {"草稿已关闭或类型不一致"};dao.put(LedgerDraft(f.id,records.owner(),f.json()))}
+    suspend fun draft(f:LedgerForm)=write {
+        validateDraft(f)
+        val current=dao.drafts().firstOrNull {it.id==f.id} ?: error("未完成编辑已保存或删除，请重新打开")
+        val previous=LedgerForm.parse(current.payload)
+        require(sameDraftFamily(previous.kind,f.kind) && previous.revision==f.revision) {"编辑来源已变化，未完成内容仍保留，请重新核对"}
+        dao.put(LedgerDraft(f.id,records.owner(),f.json()))
+    }
     suspend fun discard(id:String)=write {val refs=records.dao.linksFor("ledger_draft",id).map {it.attachmentId};records.dao.clearLinks("ledger_draft",id);dao.removeDraft(id);clean(refs)}
     private suspend fun clean(ids:List<String>) {garbage.addAll(ids)}
     suspend fun importFile(id:String,uri:Uri)=records.writes.withLock {
@@ -60,8 +70,9 @@ class LedgerRepository(val records:RecordsRepository) {
         val a=records.files.import(uri,records.owner());try {db.withTransaction {records.dao.putAttachment(a);records.dao.putLinks(listOf(AttachmentLink("ledger_draft",id,a.id,sortOrder=records.dao.linksFor("ledger_draft",id).size)))}} catch(e:Exception) {records.files.file(a).delete();throw e}
     }
     suspend fun attachExisting(id:String,fileId:String)=write {
-        require(dao.drafts().any {it.id==id});val a=records.dao.attachment(fileId) ?:error("原件不存在")
-        require(a.ownerId==records.owner() && records.files.file(a).exists()) {"附件已失效"};require(records.dao.linksFor("ledger_draft",id).size<50)
+        require(dao.drafts().any {it.id==id})
+        records.requireAvailableAttachments(listOf(AttachmentLink("ledger_draft",id,fileId)))
+        require(records.dao.linksFor("ledger_draft",id).size<50)
         records.dao.putLinks(listOf(AttachmentLink("ledger_draft",id,fileId,sortOrder=records.dao.linksFor("ledger_draft",id).size)))
     }
     suspend fun removeAttachment(id:String,fileId:String)=write {require(dao.drafts().any {it.id==id});records.dao.detach("ledger_draft",id,fileId);clean(listOf(fileId))}
@@ -173,7 +184,7 @@ class LedgerRepository(val records:RecordsRepository) {
         records.dao.clearTags(f.id,"transaction");records.dao.putTags(tags.map {EntityTag("transaction",f.id,it)})
         bindToProject(db,f.text("project").ifBlank {null},"transaction",item.id,owner)
         val draft=dao.drafts().any {it.id==f.id}
-        if(draft) {val refs=records.dao.linksFor("ledger_draft",f.id);require(refs.all {r->records.dao.attachment(r.attachmentId)?.let {records.files.file(it).exists()}==true}) {"附件缺失，请重选"}
+        if(draft) {val refs=records.dao.linksFor("ledger_draft",f.id);records.requireAvailableAttachments(refs)
             val detached=records.dao.linksFor("transaction",f.id).map {it.attachmentId};records.dao.clearLinks("transaction",f.id);records.dao.putLinks(refs.map {it.copy(entityType="transaction")});records.dao.clearLinks("ledger_draft",f.id);dao.removeDraft(f.id);clean(detached)}
         reviewClaims();log(item.id,if(old==null) "create" else "edit",type+" · "+LedgerRules.display(amount)+" · "+date)
         return item.id
@@ -241,7 +252,11 @@ class LedgerRepository(val records:RecordsRepository) {
     }
     suspend fun permanentlyDelete(id:String)=write {val t=dao.transactions().first {it.id==id};require(t.deletedAt!=null) {"请先移入回收站"};noDependencies(id)
         require(dao.transactions().none {it.originalExpenseId==id||it.relatedTransactionId==id}&&dao.items().none {it.expenseId==id}&&dao.drafts().none {it.id==id}) {"仍有历史或草稿引用"}
-        val refs=records.dao.linksFor("transaction",id).map {it.attachmentId};records.dao.clearLinks("transaction",id);records.dao.clearTags(id,"transaction");dao.clearEntries(id);dao.removeTransaction(id);clean(refs);log(id,"delete","永久删除已回收账目")}
+        require(db.tools().links().none {it.entityType=="ledger"&&it.entityId==id}) {"仍被专题或物品引用，请先解除关联"}
+        val refs=records.dao.linksFor("transaction",id).map {it.attachmentId}
+        records.dao.clearLinks("transaction",id);records.dao.clearTags(id,"transaction");dao.clearEntries(id)
+        dao.detachDeletedImport(id)
+        dao.removeTransaction(id);clean(refs);log(id,"delete","永久删除已回收账目，保留导入去重编号")}
     suspend fun saveLedger(name:String,id:String?=null,makeDefault:Boolean=false,archive:Boolean=false)=write {
         val owner=records.owner();val n=LedgerRules.name(name);val all=dao.ledgers();val old=all.find {it.id==id};require(all.none {it.id!=id&&it.normalizedName==RecordRules.normalized(n)}) {"账本名称已存在"}
         require(!archive||old?.isDefault!=true) {"请先设置另一个默认账本"};if(makeDefault) all.forEach {if(it.isDefault) dao.put(it.copy(isDefault=false))}
@@ -276,7 +291,10 @@ class LedgerRepository(val records:RecordsRepository) {
         val key=categoryId ?:"total";val existing=s.budgets.find {it.ledgerId==ledgerId&&it.month==month&&it.scopeKey==key}
         require(existing==null||id==existing.id) {"该月份已有此范围预算，请编辑原预算"};dao.put(MonthlyBudget(id ?:newId(),records.owner(),ledgerId,month,categoryId,key,LedgerRules.minor(amount),alerts));thresholds()
     }
-    suspend fun removeBudget(id:String)=write {dao.removeBudget(id)}
+    suspend fun removeBudget(id:String)=write {
+        dao.clearBudgetAlerts(id)
+        dao.removeBudget(id)
+    }
     suspend fun readBudgetAlert(id:String,threshold:Int)=write {dao.alerts().find {it.budgetId==id&&it.threshold==threshold}?.let {dao.put(it.copy(readAt=System.currentTimeMillis()))}}
     suspend fun saveTemplate(name:String,f:LedgerForm,id:String?=null)=write {require(f.kind in setOf("expense","income","transfer"));val data=JSONObject(f.payload);listOf("original","claim","tags","date","time","external","fee","linkedSource","contextSource","project").forEach(data::remove);dao.put(TransactionTemplate(id ?:newId(),records.owner(),LedgerRules.name(name),f.copy(id=newId(),revision=0,payload=data.toString()).json()))}
     suspend fun removeTemplate(id:String)=write {dao.removeTemplate(id)}
@@ -297,7 +315,7 @@ class LedgerRepository(val records:RecordsRepository) {
         dao.put(ReimbursementClaim(key,records.owner(),LedgerRules.name(name),ledgerId,submitDate ?:old?.submittedOn,if(submitDate!=null||old?.status=="submitted") "submitted" else "draft",false,counterparty,note,(old?.revision ?:0)+1))
         dao.clearItems(key);lines.forEach {dao.put(it)}
         if(s.drafts.any {it.id==key&&LedgerForm.parse(it.payload).kind=="claim"}) {
-            val refs=records.dao.linksFor("ledger_draft",key);require(refs.all {r->records.dao.attachment(r.attachmentId)?.let {it.ownerId==records.owner()&&records.files.file(it).isFile}==true}) {"附件缺失，请重选"}
+            val refs=records.dao.linksFor("ledger_draft",key);records.requireAvailableAttachments(refs)
             val detached=records.dao.linksFor("reimbursement",key).map {it.attachmentId};records.dao.clearLinks("reimbursement",key);records.dao.putLinks(refs.map {it.copy(entityType="reimbursement")});records.dao.clearLinks("ledger_draft",key);dao.removeDraft(key);clean(detached)
         }
         reviewClaims();log(key,"claim","报销申请 "+LedgerRules.display(lines.sumOf {it.requestedMinor}));return key
@@ -328,16 +346,30 @@ class LedgerRepository(val records:RecordsRepository) {
         };batch.id
     }
     suspend fun commitImport(batchId:String,allowSuspected:Boolean=false)=write {
-        val b=dao.batches().first {it.id==batchId};var all=dao.transactions()
-        dao.rows().filter {it.batchId==batchId&&it.result in setOf("pending","error")}.forEach {row->
+        val b=dao.batches().first {it.id==batchId}
+        val rows=dao.rows()
+        val identities=(dao.transactions().mapNotNull {it.externalKey}+
+            rows.filter {it.result in setOf("imported","deleted")}.mapNotNull {it.dedupKey}).toMutableSet()
+        rows.filter {it.batchId==batchId&&it.result in setOf("pending","error")}.forEach {row->
             if(row.error.isNotEmpty()) return@forEach
-            if(row.dedupKey!=null&&all.any {it.externalKey==row.dedupKey}) {dao.put(row.copy(result="skipped",error="可靠外部编号已存在"));return@forEach}
+            if(row.dedupKey!=null&&row.dedupKey in identities) {dao.put(row.copy(result="skipped",error="可靠外部编号已导入过（含已删除账目）"));return@forEach}
             if(row.suspectedDuplicate&&!allowSuspected) return@forEach
-            try {val id=writeCore(LedgerForm.parse(row.parsedValues),external=row.dedupKey,batch=batchId);dao.put(row.copy(result="imported",transactionId=id));all=dao.transactions()}
+            try {val id=writeCore(LedgerForm.parse(row.parsedValues),external=row.dedupKey,batch=batchId);dao.put(row.copy(result="imported",transactionId=id));row.dedupKey?.let(identities::add)}
             catch(e:Exception) {throw IllegalArgumentException("第 "+row.rowNumber+" 行未通过业务校验，本批次尚未新增；"+e.message,e)}
-        };dao.put(b.copy(status=if(dao.rows().filter {it.batchId==batchId}.all {it.result in setOf("imported","skipped")}) "completed" else "partial"));thresholds()
+        };dao.put(b.copy(status=if(dao.rows().filter {it.batchId==batchId}.all {it.result in setOf("imported","skipped","deleted")}) "completed" else "partial"));thresholds()
     }
-    suspend fun undoImport(batchId:String)=write {val b=dao.batches().first {it.id==batchId};val ids=dao.rows().filter {it.batchId==batchId&&it.result=="imported"}.mapNotNull {it.transactionId};ids.forEach {noDependencies(it)};ids.forEach {id->val t=dao.transactions().first {it.id==id};dao.put(t.copy(deletedAt=System.currentTimeMillis(),revision=t.revision+1));dao.clearEntries(id);log(id,"undo_import","撤销来源批次")};dao.put(b.copy(status="undone"));reviewClaims()}
+    suspend fun undoImport(batchId:String)=write {
+        val b=dao.batches().first {it.id==batchId}
+        dao.repairDeletedImportRows()
+        val ids=dao.rows().filter {it.batchId==batchId&&it.result=="imported"}.mapNotNull {it.transactionId}.toSet()
+        val transactions=dao.transactions().filter {it.id in ids&&it.deletedAt==null}
+        transactions.forEach {noDependencies(it.id)}
+        transactions.forEach {t->
+            dao.put(t.copy(deletedAt=System.currentTimeMillis(),revision=t.revision+1));dao.clearEntries(t.id)
+            log(t.id,"undo_import","撤销来源批次")
+        }
+        dao.put(b.copy(status="undone"));reviewClaims();thresholds()
+    }
     suspend fun exportCsv(ledgerId:String?=null,from:String?=null,to:String?=null,types:Set<String>?=null,fields:List<String>?=null):String {
         from?.let(LocalDate::parse);to?.let(LocalDate::parse);require(from==null||to==null||from<=to) {"开始日期不能晚于结束日期"}
         val labels=linkedMapOf("date" to "日期","amount" to "金额","type" to "类型","category" to "分类","merchant" to "商户","note" to "备注","external" to "外部编号","time" to "时刻","ledger" to "账本","account" to "账户","id" to "交易编号")

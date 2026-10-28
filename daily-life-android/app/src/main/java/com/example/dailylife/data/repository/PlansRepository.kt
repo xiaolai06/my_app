@@ -30,11 +30,25 @@ class PlansRepository(val records: RecordsRepository, val clock: FocusClock) {
         dao.habits(),dao.habitRules(),dao.habitLogs(),dao.pauses(),dao.sessions(),dao.segments(),dao.goals(),dao.progress(),
         dao.goalLinks(),dao.milestones(),dao.drafts(),dao.reminders())
     private suspend fun owner()=records.owner()
+    private fun requireWritable(deletedAt:Long?,archivedAt:Long?) {
+        require(deletedAt==null && archivedAt==null) {"请先恢复或取消归档，再修改内容"}
+    }
     suspend fun initialize() { records.initialize(); refresh() }
-    suspend fun draft(f: PlanForm) = writes.withLock { dao.put(PlanDraft(f.id,f.kind,f.json())) }
+    suspend fun draft(f: PlanForm) = writes.withLock {
+        val current=dao.drafts().firstOrNull {it.id==f.id} ?: error("未完成编辑已保存或删除，请重新打开")
+        val previous=PlanForm.parse(current.payload)
+        require(previous.kind==f.kind && previous.revision==f.revision) {"编辑来源已变化，未完成内容仍保留，请重新核对"}
+        dao.put(PlanDraft(f.id,f.kind,f.json()))
+    }
     suspend fun prepareDraft(f:PlanForm,sourceKind:String?=null,sourceId:String=f.id)=writes.withLock {db.withTransaction {
+        dao.drafts().firstOrNull {it.id==f.id}?.let {current->
+            val existing=PlanForm.parse(current.payload)
+            require(existing.kind==f.kind) {"未完成编辑编号已被其他类型使用"}
+            return@withTransaction existing
+        }
         dao.put(PlanDraft(f.id,f.kind,f.json()))
         if(sourceKind!=null) records.dao.putLinks(records.dao.linksFor(sourceKind,sourceId).map {it.copy(entityType="plan_draft",entityId=f.id)})
+        f
     }}
     suspend fun importFile(id:String,uri:android.net.Uri)=writes.withLock {
         require(dao.drafts().any {it.id==id});require(records.dao.linksFor("plan_draft",id).size<50) {"每项最多 50 份附件"}
@@ -48,8 +62,8 @@ class PlansRepository(val records: RecordsRepository, val clock: FocusClock) {
     }
     suspend fun attachFile(id:String,file:String)=writes.withLock {
         require(dao.drafts().any {it.id==id})
-        val a=records.dao.attachment(file) ?: error("附件不存在")
-        require(a.ownerId==owner() && records.files.file(a).exists() && records.dao.linksFor("plan_draft",id).size<50)
+        records.requireAvailableAttachments(listOf(AttachmentLink("plan_draft",id,file)))
+        require(records.dao.linksFor("plan_draft",id).size<50)
         records.dao.putLinks(listOf(AttachmentLink("plan_draft",id,file)))
     }
     suspend fun discard(id: String)=writes.withLock { dao.removeDraft(id); cleanLinks("plan_draft",id) }
@@ -71,6 +85,7 @@ class PlansRepository(val records: RecordsRepository, val clock: FocusClock) {
             "task" -> {
                 require(f.text("pendingChild").isBlank()) {"还有未加入的子任务，请先点“加入”或清空该输入"}
                 val old=dao.tasks().find { it.id==f.id }; checkVersion(old?.revision,f)
+                old?.let {requireWritable(it.deletedAt,it.archivedAt)}
                 old?.let {freezeHistory(f,it.title)}
                 val planned=date("planned"); val due=date("due"); val time=f.text("dueTime").takeIf { it.isNotBlank() }?.also { LocalTime.parse(it) }
                 require(time==null || due!=null) { "截止时刻需要先设置截止日期" }
@@ -96,6 +111,7 @@ class PlansRepository(val records: RecordsRepository, val clock: FocusClock) {
             }
             "event" -> {
                 val old=dao.events().find { it.id==f.id }; checkVersion(old?.revision,f)
+                old?.let {requireWritable(it.deletedAt,it.archivedAt)}
                 old?.let {freezeHistory(f,it.title)}
                 val start=LocalDate.parse(f.text("start",LocalDate.now().toString())); val end=LocalDate.parse(f.text("end",start.toString()))
                 val allDay=f.text("allDay")=="true"; require(end>=start) { "结束日期不能早于开始日期" }
@@ -112,6 +128,7 @@ class PlansRepository(val records: RecordsRepository, val clock: FocusClock) {
             }
             "habit" -> {
                 val old=dao.habits().find { it.id==f.id }; checkVersion(old?.revision,f)
+                old?.let {requireWritable(it.deletedAt,it.archivedAt)}
                 val tracking=f.text("tracking","once"); require(tracking in setOf("once","quantity","duration"))
                 require(old==null || old.trackingType==tracking) { "已有习惯请保留记录方式；新建习惯可使用其他单位" }
                 val start=date("start") ?: LocalDate.now().toString(); val end=date("end"); require(end==null || end>=start) {"结束日期不能早于开始日期"}
@@ -137,6 +154,7 @@ class PlansRepository(val records: RecordsRepository, val clock: FocusClock) {
             }
             "goal" -> {
                 val old=dao.goals().find { it.id==f.id }; checkVersion(old?.revision,f)
+                old?.let {requireWritable(it.deletedAt,it.archivedAt)}
                 val source=f.text("source","manual"); require(source in setOf("manual","tasks","focus","milestones"))
                 require(old==null || old.progressSource==source) { "已有目标请保留进度来源，避免混算历史" }
                 val target=PlanRules.milli(f.text("target","1")); require(target>0 && target<=1_000_000_000_000L) {"目标值需大于 0，且不超过十亿"}
@@ -149,10 +167,11 @@ class PlansRepository(val records: RecordsRepository, val clock: FocusClock) {
                 if(old==null && source in setOf("tasks","focus")) {
                     val sources=f.text("sources").split(",").filter {it.isNotBlank()}.toSet()
                     require(sources.isNotEmpty()) {"请至少选择一个进度来源"}
+                    val goal=dao.goals().first {it.id==f.id}
                     sources.forEach {id->
-                        require(if(source=="tasks") dao.tasks().any {it.id==id && it.ownerId==owner && it.deletedAt==null && dao.rules().none {r->r.entityId==id}}
-                            else dao.sessions().any {it.id==id && it.ownerId==owner && it.deletedAt==null && it.state in setOf("finished","early")}) {"进度来源不可用"}
-                        dao.put(GoalSourceLink(f.id,if(source=="tasks") "task" else "focus",id))
+                        val type=goalSourceType(goal)
+                        requireAvailableGoalSource(goal,type,id)
+                        dao.put(GoalSourceLink(f.id,type,id))
                     }
                 }
                 if(old==null && source=="milestones") {
@@ -168,7 +187,7 @@ class PlansRepository(val records: RecordsRepository, val clock: FocusClock) {
         records.dao.clearTags(f.id,f.kind)
         records.dao.putTags(tagIds.map { EntityTag(f.kind,f.id,it) })
         val refs=records.dao.linksFor("plan_draft",f.id)
-        require(refs.all {records.dao.attachment(it.attachmentId)?.let {a->a.ownerId==owner && records.files.file(a).exists()}==true}) {"附件缺失，请重选"}
+        records.requireAvailableAttachments(refs)
         detached+=records.dao.linksFor(f.kind,f.id).map {it.attachmentId}
         records.dao.clearLinks(f.kind,f.id)
         records.dao.putLinks(refs.map { it.copy(entityType=f.kind,entityId=f.id) })
@@ -252,34 +271,83 @@ class PlansRepository(val records: RecordsRepository, val clock: FocusClock) {
         return f
     }
     suspend fun taskAction(row:TaskRow,action:String,children:Boolean=false)=writes.withLock { db.withTransaction {
-        require(action in setOf("todo","doing","done","cancelled"))
-        val current=dao.tasks().first { it.id==row.task.id }; require(current.deletedAt==null)
-        if(row.occurrence!=null) { val o=dao.occurrences().first { it.id==row.occurrence.id }; dao.put(o.copy(status=action,completedAt=if(action=="done") clock.wall() else null,
-            subtaskStates=if(children && action=="done") dao.subtasks().filter {it.taskId==current.id}.joinToString(",") {it.id} else o.subtaskStates)) }
-        else dao.put(current.copy(status=action,completedAt=if(action=="done") clock.wall() else null,updatedAt=clock.wall(),revision=current.revision+1))
-        if(children && action=="done" && row.occurrence==null) dao.subtasks().filter { it.taskId==current.id }.forEach { dao.put(it.copy(completedAt=clock.wall())) }
+        setTaskStatus(row,action,children)
     } }
+    suspend fun completeTasks(rows:List<TaskRow>,children:Boolean=false)=writes.withLock { db.withTransaction {
+        require(rows.isNotEmpty()) {"请先选择任务"}
+        rows.distinctBy {it.key}.forEach {setTaskStatus(it,"done",children)}
+    } }
+    private suspend fun setTaskStatus(row:TaskRow,action:String,children:Boolean) {
+        require(action in setOf("todo","doing","done","cancelled"))
+        val current=dao.tasks().first { it.id==row.task.id }
+        require(current.deletedAt==null && current.archivedAt==null) {"请先恢复或取消归档，再修改任务状态"}
+        if(row.occurrence!=null) {
+            val o=dao.occurrences().first { it.id==row.occurrence.id }
+            require(o.entityType=="task" && o.entityId==current.id) {"重复实例与任务不匹配，请重新打开任务"}
+            dao.put(o.copy(status=action,completedAt=if(action=="done") o.completedAt ?: clock.wall() else null,
+            subtaskStates=if(children && action=="done") dao.subtasks().filter {it.taskId==current.id}.joinToString(",") {it.id} else o.subtaskStates)) }
+        else if(current.status!=action) dao.put(current.copy(status=action,completedAt=if(action=="done") current.completedAt ?: clock.wall() else null,updatedAt=clock.wall(),revision=current.revision+1))
+        if(children && action=="done" && row.occurrence==null) dao.subtasks().filter { it.taskId==current.id && it.completedAt==null }.forEach { dao.put(it.copy(completedAt=clock.wall())) }
+    }
     suspend fun subtask(id:String,occurrenceId:String?=null)=writes.withLock { db.withTransaction {
         val v=dao.subtasks().first { it.id==id }
-        require(dao.tasks().any { it.id==v.taskId && it.deletedAt==null })
-        if(occurrenceId==null) dao.put(v.copy(completedAt=if(v.completedAt==null) clock.wall() else null))
-        else { val o=dao.occurrences().first {it.id==occurrenceId && it.entityId==v.taskId}
+        val parent=dao.tasks().first {it.id==v.taskId}
+        require(parent.deletedAt==null && parent.archivedAt==null) {"请先恢复或取消归档，再修改子任务"}
+        if(occurrenceId==null) {
+            require(parent.status!="cancelled") {"请先将任务恢复为待办"}
+            dao.put(v.copy(completedAt=if(v.completedAt==null) clock.wall() else null))
+        } else { val o=dao.occurrences().first {it.id==occurrenceId && it.entityId==v.taskId && it.entityType=="task"}
+            require(o.status !in setOf("cancelled","skipped")) {"请先将本次任务恢复为待办"}
             val done=o.subtaskStates.split(",").filter {it.isNotBlank()}.toMutableSet()
             if(!done.add(id)) done.remove(id)
             dao.put(o.copy(subtaskStates=done.joinToString(","))) }
     } }
     suspend fun moveTasks(ids:Set<String>,group:String?)=writes.withLock { db.withTransaction {
         require(group==null || dao.groups().any {it.id==group && it.archivedAt==null})
-        dao.tasks().filter {it.id in ids}.forEach {dao.put(it.copy(groupId=group,revision=it.revision+1,updatedAt=clock.wall()))}
+        val targets=dao.tasks().filter {it.id in ids}
+        require(ids.isNotEmpty() && targets.size==ids.size && targets.all {it.deletedAt==null && it.archivedAt==null}) {"所选任务已变化，请重新选择"}
+        targets.forEach {dao.put(it.copy(groupId=group,revision=it.revision+1,updatedAt=clock.wall()))}
     } }
-    suspend fun readReminder(id:Long)=writes.withLock {dao.reminders().firstOrNull {it.id==id}?.let {dao.put(it.copy(readAt=clock.wall()))}}
-    suspend fun instance(id:String,date:String?,title:String?,status:String?)=writes.withLock {
-        val o=dao.occurrences().first { it.id==id }; date?.let(LocalDate::parse)
-        dao.put(o.copy(scheduledDate=date ?: o.scheduledDate,title=title?.let(PlanRules::title) ?: o.title,
-            status=status ?: o.status,completedAt=if(status=="done") clock.wall() else if(status!=null) null else o.completedAt))
+    suspend fun manageTasks(ids:Set<String>,action:String)=writes.withLock { db.withTransaction {
+        require(ids.isNotEmpty() && action in setOf("trash","restore"))
+        ids.forEach {manageTask(it,action)}
+    } }
+    private suspend fun manageTask(id:String,action:String) {
+        val t=dao.tasks().firstOrNull {it.id==id} ?: error("所选任务已不存在，请重新选择")
+        val now=clock.wall()
+        dao.put(when(action) {
+            "trash"->t.copy(deletedAt=t.deletedAt ?: now);"restore"->t.copy(deletedAt=null)
+            "archive"->t.copy(archivedAt=if(t.archivedAt==null) now else null)
+            else->error("未知任务操作")
+        }.copy(revision=t.revision+1,updatedAt=now))
     }
+    suspend fun readReminder(id:Long)=writes.withLock {dao.reminders().firstOrNull {it.id==id}?.let {dao.put(it.copy(readAt=clock.wall()))}}
+    suspend fun instance(id:String,date:String?,title:String?,status:String?)=writes.withLock { db.withTransaction {
+        val o=dao.occurrences().firstOrNull { it.id==id } ?: error("重复事项已不存在")
+        require(o.entityType in setOf("task","event")) {"不支持的重复事项类型"}
+        val rule=dao.rules().firstOrNull {it.id==o.ruleId && it.entityType==o.entityType && it.entityId==o.entityId}
+            ?: error("重复事项归属已变化，请重新打开")
+        val validStatuses=if(o.entityType=="task") setOf("todo","doing","done","cancelled","skipped") else setOf("scheduled","cancelled")
+        require(status==null || status in validStatuses) {"事项状态不正确"}
+        if(o.entityType=="task") {
+            val parent=dao.tasks().firstOrNull {it.id==o.entityId && it.ownerId==rule.ownerId} ?: error("原任务已不存在")
+            requireWritable(parent.deletedAt,parent.archivedAt)
+        } else {
+            val parent=dao.events().firstOrNull {it.id==o.entityId && it.ownerId==rule.ownerId} ?: error("原日程已不存在")
+            requireWritable(parent.deletedAt,parent.archivedAt)
+        }
+        date?.let(LocalDate::parse)
+        dao.put(o.copy(scheduledDate=date ?: o.scheduledDate,title=title?.let(PlanRules::title) ?: o.title,
+            status=status ?: o.status,completedAt=if(status=="done") o.completedAt ?: clock.wall() else if(status!=null) null else o.completedAt))
+    } }
     suspend fun stop(ruleId:String)=writes.withLock { db.withTransaction {
-        val r=dao.rules().first { it.id==ruleId }; val from=LocalDate.now().toString(); dao.put(r.copy(stoppedFrom=from))
+        val r=dao.rules().first { it.id==ruleId }
+        when(r.entityType) {
+            "task"->{val parent=dao.tasks().first {it.id==r.entityId && it.ownerId==r.ownerId};requireWritable(parent.deletedAt,parent.archivedAt)}
+            "event"->{val parent=dao.events().first {it.id==r.entityId && it.ownerId==r.ownerId};requireWritable(parent.deletedAt,parent.archivedAt)}
+            else->error("不支持的重复事项类型")
+        }
+        val from=LocalDate.now().toString(); dao.put(r.copy(stoppedFrom=from))
         dao.occurrences().filter { it.ruleId==r.id && it.originalKey>=from && it.status in setOf("todo","scheduled") }.forEach { dao.put(it.copy(status="cancelled")) }
     } }
     suspend fun group(name:String,id:String?=null,archive:Boolean=false,moveTo:String?=null,delete:Boolean=false)=writes.withLock { db.withTransaction {
@@ -292,13 +360,13 @@ class PlansRepository(val records: RecordsRepository, val clock: FocusClock) {
     suspend fun manage(kind:String,id:String,action:String)=writes.withLock { db.withTransaction {
         val now=clock.wall()
         when(kind) {
-            "task" -> { val t=dao.tasks().first { it.id==id };dao.put(when(action) {
-                "trash"->t.copy(deletedAt=now); "restore"->t.copy(deletedAt=null); "archive"->t.copy(archivedAt=if(t.archivedAt==null) now else null)
-                else->error("未知任务操作") }.copy(revision=t.revision+1)) }
-            "event" -> { val e=dao.events().first { it.id==id };dao.put(when(action) {
+            "task" -> manageTask(id,action)
+            "event" -> { val e=dao.events().first { it.id==id };if(action=="cancel") requireWritable(e.deletedAt,e.archivedAt);dao.put(when(action) {
                 "trash"->e.copy(deletedAt=now); "restore"->e.copy(deletedAt=null); "cancel"->e.copy(status=if(e.status=="cancelled") "scheduled" else "cancelled")
                 "archive"->e.copy(archivedAt=if(e.archivedAt==null) now else null);else->error("未知日程操作") }.copy(revision=e.revision+1)) }
             "habit" -> { val h=dao.habits().first { it.id==id }
+                require(action in setOf("trash","restore","end","pause")) {"未知习惯操作"}
+                if(action !in setOf("trash","restore")) requireWritable(h.deletedAt,h.archivedAt)
                 if(action=="pause") require(h.status!="ended") {"已结束的习惯不能继续，请新建习惯"}
                 when(action) {
                     "pause" -> { val open=dao.pauses().firstOrNull { it.habitId==id && it.endDate==null }
@@ -308,6 +376,8 @@ class PlansRepository(val records: RecordsRepository, val clock: FocusClock) {
                 dao.put(when(action) { "trash"->h.copy(deletedAt=now); "restore"->h.copy(deletedAt=null); "end"->h.copy(status="ended",endDate=LocalDate.now().toString())
                     "pause"->h.copy(status=if(h.status=="paused") "active" else "paused");else->h }.copy(revision=h.revision+1,updatedAt=now)) }
             "goal" -> { val g=dao.goals().first { it.id==id }
+                require(action in setOf("trash","restore","archive","pause","done","reopen")) {"未知目标操作"}
+                if(action !in setOf("trash","restore","archive")) requireWritable(g.deletedAt,g.archivedAt)
                 if(action=="done") require(load().goalValue(g).second>0) {"请先配置有效的进度来源"}
                 val state=if(action=="pause") (if(g.state=="paused") "active" else "paused") else if(action=="done") "done" else if(action=="reopen") "active" else g.state
                 dao.put(g.copy(state=state,completedAt=if(action=="done") now else if(action=="reopen") null else g.completedAt,deletedAt=if(action=="trash") now else if(action=="restore") null else g.deletedAt,
@@ -341,7 +411,8 @@ class PlansRepository(val records: RecordsRepository, val clock: FocusClock) {
         };collectFiles(files)
     }
     suspend fun habitLog(habitId:String,date:String,value:String,note:String="",id:String?=null,delete:Boolean=false)=writes.withLock { db.withTransaction {
-        val s=load();val h=s.habits.first { it.id==habitId && it.deletedAt==null }; val d=LocalDate.parse(date)
+        val s=load();val h=s.habits.firstOrNull { it.id==habitId } ?: error("习惯已不存在")
+        requireWritable(h.deletedAt,h.archivedAt);val d=LocalDate.parse(date)
         if(delete && id!=null) {require(s.logs.any {it.id==id && it.habitId==habitId});dao.removeHabitLog(id);return@withTransaction}
         require(d<=LocalDate.now() && date>=h.startDate && (h.endDate==null || date<=h.endDate)) { "只能登记开始日之后、结束日前且不晚于今天的日期" }
         require(s.habitScheduled(h,date)) { "这一天为休息或暂停日期，不能打卡" }
@@ -354,7 +425,8 @@ class PlansRepository(val records: RecordsRepository, val clock: FocusClock) {
         }
     } }
     suspend fun goalLog(goalId:String,date:String,value:String,note:String,id:String?=null,delete:Boolean=false)=writes.withLock { db.withTransaction {
-        val g=dao.goals().first { it.id==goalId && it.deletedAt==null }; require(g.progressSource=="manual");LocalDate.parse(date)
+        val g=dao.goals().firstOrNull { it.id==goalId } ?: error("目标已不存在")
+        requireWritable(g.deletedAt,g.archivedAt);require(g.progressSource=="manual");LocalDate.parse(date)
         if(id!=null) require(dao.progress().any { it.id==id && it.goalId==goalId })
         if(delete && id!=null) dao.removeProgress(id) else {
             val v=PlanRules.milli(value);require(v!=0L && v in -1_000_000_000_000L..1_000_000_000_000L)
@@ -362,20 +434,48 @@ class PlansRepository(val records: RecordsRepository, val clock: FocusClock) {
         }
     } }
     suspend fun link(goalId:String,type:String,source:String,remove:Boolean=false)=writes.withLock { db.withTransaction {
-        val g=dao.goals().first { it.id==goalId && it.deletedAt==null }
-        require(type=="task" && g.progressSource=="tasks" || type=="focus" && g.progressSource=="focus")
+        val g=dao.goals().firstOrNull { it.id==goalId } ?: error("目标已不存在")
+        requireWritable(g.deletedAt,g.archivedAt)
+        require(type==goalSourceType(g)) {"目标来源类型不匹配"}
         if(remove) dao.unlink(goalId,source) else {
-            require(if(type=="task") dao.tasks().any { it.id==source && it.deletedAt==null && it.ownerId==g.ownerId && dao.rules().none { r -> r.entityId==source } }
-                else dao.sessions().any { it.id==source && it.ownerId==g.ownerId && it.deletedAt==null && it.state in setOf("finished","early") }) { "只能关联有效的普通任务或已结束专注" }
+            if(dao.goalLinks().any {it.goalId==goalId && it.sourceType==type && it.sourceId==source}) return@withTransaction
+            requireAvailableGoalSource(g,type,source)
             dao.put(GoalSourceLink(goalId,type,source))
         }
     } }
-    suspend fun milestone(goalId:String,title:String,date:String?=null,id:String?=null,toggle:Boolean=false,delete:Boolean=false)=writes.withLock {
-        require(dao.goals().any { it.id==goalId && it.progressSource=="milestones" && it.deletedAt==null })
-        val old=dao.milestones().find { it.id==id };require(old==null || old.goalId==goalId);date?.let(LocalDate::parse)
+    /** A selector owns a temporary set; only its Confirm action calls this transaction. */
+    suspend fun setGoalSources(goalId:String,sources:Set<String>)=writes.withLock { db.withTransaction {
+        val goal=dao.goals().firstOrNull {it.id==goalId} ?: error("目标已不存在")
+        requireWritable(goal.deletedAt,goal.archivedAt)
+        val type=goalSourceType(goal)
+        require(sources.all {it.isNotBlank()}) {"关联来源不正确"}
+        val existing=dao.goalLinks().filter {it.goalId==goalId}
+        require(existing.all {it.sourceType==type}) {"关联来源类型异常，请先核对"}
+        val currentIds=existing.map {it.sourceId}.toSet()
+        val additions=sources-currentIds
+        // Existing missing/deleted sources can stay selected, or be explicitly removed.
+        additions.forEach {requireAvailableGoalSource(goal,type,it)}
+        existing.filter {it.sourceId !in sources}.forEach {dao.unlink(goalId,it.sourceId)}
+        additions.forEach {dao.put(GoalSourceLink(goalId,type,it))}
+    } }
+    private fun goalSourceType(goal:Goal)=when(goal.progressSource) {
+        "tasks"->"task";"focus"->"focus";else->error("此目标不使用关联来源")
+    }
+    private suspend fun requireAvailableGoalSource(goal:Goal,type:String,source:String) {
+        require(if(type=="task") dao.tasks().any {
+            it.id==source && it.ownerId==goal.ownerId && it.deletedAt==null && it.archivedAt==null &&
+                dao.rules().none {rule->rule.entityType=="task" && rule.entityId==source}
+        } else dao.sessions().any {
+            it.id==source && it.ownerId==goal.ownerId && it.deletedAt==null && it.archivedAt==null && it.state in setOf("finished","early")
+        }) {"只能关联有效的普通任务或已结束专注"}
+    }
+    suspend fun milestone(goalId:String,title:String,date:String?=null,id:String?=null,toggle:Boolean=false,delete:Boolean=false)=writes.withLock { db.withTransaction {
+        val goal=dao.goals().firstOrNull {it.id==goalId} ?: error("目标已不存在")
+        require(goal.progressSource=="milestones") {"此目标不使用里程碑"};requireWritable(goal.deletedAt,goal.archivedAt)
+        val old=dao.milestones().find { it.id==id };require(id==null || old!=null) {"里程碑已不存在"};require(old==null || old.goalId==goalId);date?.let(LocalDate::parse)
         if(delete && id!=null) dao.removeMilestone(id) else dao.put(Milestone(id ?: newId(),goalId,PlanRules.title(title),date,
             if(toggle) (if(old?.completedAt==null) clock.wall() else null) else old?.completedAt,old?.sortOrder ?: dao.milestones().count { it.goalId==goalId }))
-    }
+    } }
     suspend fun startFocus(f:PlanForm)=writes.withLock { db.withTransaction {
         if(dao.sessions().any {it.id==f.id}) {dao.removeDraft(f.id);return@withTransaction}
         require(dao.sessions().none { it.state in setOf("running","paused","review","awaiting") && it.deletedAt==null }) { "已有专注，请先继续或结束" }
@@ -391,23 +491,27 @@ class PlansRepository(val records: RecordsRepository, val clock: FocusClock) {
         records.dao.putTags(tags.map {EntityTag("focus",s.id,it)})
         dao.removeDraft(f.id)
     } }
-    suspend fun focusNote(id:String,note:String)=writes.withLock {
+    suspend fun focusNote(id:String,note:String)=writes.withLock { db.withTransaction {
         require(note.length<=50000)
-        val s=dao.sessions().first {it.id==id && it.deletedAt==null}
+        val s=dao.sessions().firstOrNull {it.id==id} ?: error("专注记录已不存在")
+        requireWritable(s.deletedAt,s.archivedAt)
         dao.put(s.copy(note=note,revision=s.revision+1))
-    }
+    } }
     private fun segment(s:FocusSession)=FocusSegment(sessionId=s.id,phase=s.phase,startAt=clock.wall(),elapsedStart=clock.elapsed(),bootId=clock.boot(),round=s.round)
-    suspend fun openSeconds(s:FocusSession):Long? {
-        val seg=dao.segments().lastOrNull { it.sessionId==s.id && it.endAt==null } ?: return 0
+    suspend fun openSeconds(s:FocusSession):Long? = openSeconds(s,dao.segments())
+    fun openSeconds(s:FocusSession,segments:List<FocusSegment>):Long? {
+        val seg=segments.lastOrNull { it.sessionId==s.id && it.endAt==null } ?: return 0
         val elapsed=clock.elapsed()-seg.elapsedStart
-        if(seg.bootId<0 || clock.boot()<0 || clock.boot()!=seg.bootId || elapsed<0 || kotlin.math.abs((clock.wall()-seg.startAt)-elapsed)>120000) return null
-        val used=dao.segments().filter {it.sessionId==s.id && it.phase==s.phase && it.round==s.round && it.endAt!=null}.sumOf {it.seconds}
+        val boot=clock.boot()
+        if(seg.bootId<0 || boot<0 || boot!=seg.bootId || elapsed<0 || kotlin.math.abs((clock.wall()-seg.startAt)-elapsed)>120000) return null
+        val used=segments.filter {it.sessionId==s.id && it.phase==s.phase && it.round==s.round && it.endAt!=null}.sumOf {it.seconds}
         val cap=if(s.phase=="break") (if(s.round % s.rounds==0) s.longBreak else s.shortBreak)-used
             else if(s.mode=="stopwatch") Long.MAX_VALUE else s.plannedSeconds-used
         return (elapsed/1000).coerceAtMost(cap.coerceAtLeast(0))
     }
     suspend fun focusAction(id:String,action:String,reason:String="",corrected:Long?=null)=writes.withLock { db.withTransaction {
-        var s=dao.sessions().first { it.id==id }
+        var s=dao.sessions().firstOrNull { it.id==id } ?: error("专注记录已不存在")
+        requireWritable(s.deletedAt,s.archivedAt)
         val active=s.state in setOf("running","paused","review","awaiting")
         require(active || action=="correct") { "此专注已经结束" }
         if(action=="pause") require(s.state=="running")

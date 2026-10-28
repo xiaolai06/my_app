@@ -53,7 +53,6 @@ import kotlinx.coroutines.withContext
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 TextButton(onClick = dismiss) { Text("关闭") }
                 Text(attachment.displayName, Modifier.weight(1f), maxLines = 2)
-                TextButton(onClick = export) { Text("导出原件") }
             }
             Box(Modifier.fillMaxWidth().weight(1f).clipToBounds().transformable(transform), contentAlignment = Alignment.Center) {
                 val visual = Modifier.fillMaxSize().graphicsLayer { scaleX = zoom; scaleY = zoom }

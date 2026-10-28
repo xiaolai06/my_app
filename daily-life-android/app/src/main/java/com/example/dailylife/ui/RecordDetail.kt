@@ -33,18 +33,15 @@ import java.time.format.DateTimeFormatter
         bottomBar = { GlassPanel(Modifier.fillMaxWidth().navigationBarsPadding().padding(12.dp), radius = 24) {
             Row(Modifier.fillMaxWidth().padding(10.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                 TextButton(onClick = { actions = true }) { Text("更多操作") }
-                if (b.record.deletedAt == null) Button(enabled = !ui.busy, onClick = { vm.begin(b.record.typeId, b.record.id) }) { Text("编辑记录") }
-                else Button(enabled = !ui.busy, onClick = { vm.mutate(setOf(b.record.id), "restore") }) { Text("恢复记录") }
+                if (b.record.deletedAt == null) GlassButton(enabled = !ui.busy, onClick = { vm.begin(b.record.typeId, b.record.id) }) { Text("编辑记录") }
+                else GlassButton(enabled = !ui.busy, onClick = { vm.mutate(setOf(b.record.id), "restore") }) { Text("恢复记录") }
             }
         } }) { padding ->
         Column(Modifier.fillMaxSize().statusBarsPadding().padding(bottom = padding.calculateBottomPadding())) {
-            Row(Modifier.padding(horizontal = 10.dp), verticalAlignment = Alignment.CenterVertically) {
-                IconButton(onClick = { vm.detail(null) }) { Icon(Icons.Default.ArrowBack, "返回记录") }
-                Text(ui.snapshot.types.find { it.id == b.record.typeId }?.name.orEmpty(), color = p.muted)
-            }
+            GlassPageHeader(ui.snapshot.types.find {it.id==b.record.typeId}?.name.orEmpty(),back={vm.detail(null)})
             Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 23.dp),
                 verticalArrangement = Arrangement.spacedBy(18.dp)) {
-                SelectionContainer { Text(ui.snapshot.title(b), style = MaterialTheme.typography.headlineMedium) }
+                JournalStory(ui.snapshot.title(b),b.body,b.diary?.diaryDate,b.diary?.mood,runCatching {JournalStyle.parse(b.record.presentation)}.getOrDefault(JournalStyle()),ui.snapshot.attachmentsFor("record",b.record.id).filter {it.mime.startsWith("image/")},vm.repository.files,openAttachment)
                 Text(Instant.ofEpochMilli(b.record.updatedAt).atZone(ZoneId.systemDefault()).format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm")) +
                     if (b.record.deletedAt != null) " · 回收站" else if (b.record.archivedAt != null) " · 已归档" else "", style = MaterialTheme.typography.bodySmall, color = p.muted)
                 b.diary?.let { Text(it.diaryDate + if (it.mood.isNotBlank()) " · " + it.mood else "", color = p.accent) }
@@ -52,7 +49,7 @@ import java.time.format.DateTimeFormatter
                     MarkdownBody("[" + it.url.replace("]", "%5D") + "](" + it.url + ")")
                     Text(if (it.readAt == null) "未读收藏" else "已读收藏", color = p.muted)
                 }
-                if (b.body.isNotBlank()) MarkdownBody(b.body, Modifier.fillMaxWidth())
+
                 b.fields.sortedBy { it.sortOrder }.forEach { f -> GlassPanel(Modifier.fillMaxWidth(), radius = 18) {
                     Column(Modifier.padding(16.dp)) {
                         Text(f.name, style = MaterialTheme.typography.labelMedium, color = p.muted)
@@ -66,7 +63,7 @@ import java.time.format.DateTimeFormatter
                 Text((ui.snapshot.folders.find { it.id == b.record.folderId }?.name ?: "未分类") + " · " +
                     (if (b.record.organizationStatus == "inbox") "待整理" else "已整理") +
                     if (tags.isNotEmpty()) "\n" + tags.joinToString("  ") { "#" + it.name } else "", color = p.muted)
-                val attachments = ui.snapshot.attachmentsFor("record", b.record.id)
+                val attachments = ui.snapshot.attachmentsFor("record", b.record.id).filterNot {it.mime.startsWith("image/")}
                 if (attachments.isNotEmpty()) {
                     SectionLabel("附件原件")
                     AttachmentList(attachments, vm.repository.files, openAttachment)
@@ -75,21 +72,20 @@ import java.time.format.DateTimeFormatter
             }
         }
     }
-    if (actions) GlassSheet("记录操作", { actions = false }) {
-        if (b.record.deletedAt == null) {
-            FlowChoices(listOf("pin" to if (b.record.pinOrder == null) "置顶" else "取消置顶",
-                "archive" to if (b.record.archivedAt == null) "归档" else "取消归档",
-                "organize" to if (b.record.organizationStatus == "inbox") "标为已整理" else "放回待整理"), null) {
-                vm.mutate(setOf(b.record.id), it); actions = false
+    if(actions) GlassSheet("记录操作",{actions=false}) {
+        if(b.record.deletedAt==null) {
+            listOf("pin" to if(b.record.pinOrder==null) "置顶" else "取消置顶",
+                "archive" to if(b.record.archivedAt==null) "归档" else "取消归档",
+                "organize" to if(b.record.organizationStatus=="inbox") "标为已整理" else "放回待整理").forEach {(key,label)->
+                GlassActionRow(label,enabled=!ui.busy) {vm.mutate(setOf(b.record.id),key);actions=false}
             }
-            if (b.bookmark != null) TextButton(onClick = { vm.mutate(setOf(b.record.id), "read"); actions = false }) { Text("切换已读 / 未读") }
-            TextButton(onClick = { vm.duplicate(b.record.id); actions = false }) { Text(if (b.diary != null) "复制为普通随记" else "创建副本") }
-            TextButton(onClick = { exportRecord(b); actions = false }) { Text("导出 Markdown") }
-            TextButton(onClick = { shareRecord(b); actions = false }) { Text("分享文字（排除私密字段）") }
-            TextButton(onClick = { trash = true; actions = false }) { Text("移入回收站") }
+            if(b.bookmark!=null) GlassActionRow("切换已读 / 未读",enabled=!ui.busy) {vm.mutate(setOf(b.record.id),"read");actions=false}
+            GlassActionRow(if(b.diary!=null) "复制为普通随记" else "创建副本",enabled=!ui.busy) {vm.duplicate(b.record.id);actions=false}
+            GlassActionRow("分享文字（排除私密字段）",enabled=!ui.busy) {shareRecord(b);actions=false}
+            GlassActionRow("移入回收站",enabled=!ui.busy,destructive=true) {trash=true;actions=false}
         } else {
-            TextButton(onClick = { vm.mutate(setOf(b.record.id), "restore"); actions = false }) { Text("恢复到原位置") }
-            TextButton(onClick = { destroy = true; actions = false }) { Text("永久删除") }
+            GlassActionRow("恢复到原位置",enabled=!ui.busy) {vm.mutate(setOf(b.record.id),"restore");actions=false}
+            GlassActionRow("永久删除",enabled=!ui.busy,destructive=true) {destroy=true;actions=false}
         }
     }
     if (trash) ConfirmDialog("移入回收站？", "记录和附件原件仍会保留，可以稍后恢复。", { trash = false }, { vm.mutate(setOf(b.record.id), "trash") }, "移入回收站")

@@ -4,7 +4,7 @@ import org.json.JSONObject
 import java.time.*
 import java.time.temporal.ChronoUnit
 
-val toolKinds=listOf("checklist" to "生活清单","anniversary" to "纪念日","subscription" to "订阅","bill" to "缴费","item" to "物品","loan" to "借还","project" to "专题")
+val toolKinds=listOf("checklist" to "生活清单","anniversary" to "纪念日","subscription" to "订阅","bill" to "缴费","item" to "物品","loan" to "借还","project" to "专题","outfit" to "穿搭")
 data class ToolForm(val kind:String,val id:String=newId(),val revision:Long=0,val fields:Map<String,String> = emptyMap()) {
     fun text(key:String,default:String="")=fields[key] ?: default
     fun set(key:String,value:String)=copy(fields=fields+(key to value))
@@ -22,7 +22,8 @@ fun ToolsSnapshot.reminders():List<PlanReminder> {
             "subscription","bill"->{periods.filter {it.sourceId==e.id && it.status=="pending"}.forEach {add(it.dueDate,"period:"+it.originalKey)};if(e.state=="trial" && e.field("trialEnd").isNotBlank()) add(e.field("trialEnd"),"trial")}
             "anniversary"->nextDate(e)?.let {add(it.toString(),"anniversary:"+it)}
             "loan"->if(e.field("end").isNotBlank() && remaining(e)>0) add(e.field("end"),"return")
-            "item"->if(e.field("warranty").isNotBlank()) add(e.field("warranty"),"warranty")
+            "item"->{listOf("warranty" to "warranty","expiry" to "expiry","careDate" to "care").forEach {(field,key)->if(e.field(field).isNotBlank()) add(e.field(field),key)}}
+            "outfit"->if(e.field("date").isNotBlank()) add(e.field("date"),"outfit")
             "checklist"->if(e.field("date").isNotBlank()) add(e.field("date"),"single")
         }
     };return wanted

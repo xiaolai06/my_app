@@ -1,78 +1,131 @@
 {
-  "version": "3.2",
-  "updatedAt": "2026-10-25",
-  "status": "design-starting-values-not-device-validated",
+  "version": "3.9",
+  "updatedAt": "2026-10-28",
+  "status": "native-reference-adaptation",
   "layout": "comfortable-grouped",
   "primaryDevice": "OPPO Find X9 Pro",
-  "defaultMode": "basic-until-device-validation",
+  "defaultMode": "static-material-and-api31-navigation-blur",
   "capabilityPolicy": {
     "basicMinApi": 26,
     "backdropBlurMinApi": 31,
     "runtimeShaderRefractionMinApi": 33
   },
-  "shapeDp": { "card": 24, "filter": 18, "input": 17, "button": 26, "sheet": 28, "navigationTop": 25, "menu": 21, "dateCell": 16 },
-  "coverage": ["task-row", "note-card", "checkbox", "search", "button", "text-field", "setting-row", "select", "switch", "sheet", "toast", "navigation", "menu-option", "date-picker", "month-picker", "time-picker"],
+  "shapeDp": {
+    "card": 18,
+    "filter": 24,
+    "input": 16,
+    "button": 24,
+    "sheet": 28,
+    "navigationTop": 26,
+    "menu": 21,
+    "dateCell": 16
+  },
+  "coverage": [
+    "task-row",
+    "note-card",
+    "checkbox",
+    "search",
+    "button",
+    "text-field",
+    "setting-row",
+    "select",
+    "switch",
+    "sheet",
+    "toast",
+    "navigation",
+    "menu-option",
+    "date-picker",
+    "month-picker",
+    "time-picker"
+  ],
   "navigation": {
-    "placement": "attached-bottom-with-system-insets",
+    "placement": "floating-with-system-insets",
     "columns": 5,
-    "labels": ["今天", "记录", "计划", "账本", "功能箱"],
-    "equalWidth": true,
-    "iconAboveLabel": true,
-    "labelsAlwaysVisible": true,
-    "bodyMinimumHeightDp": 76,
-    "itemMinimumHeightDp": 68,
-    "iconSizeDp": 23,
-    "labelSizeSp": 12,
-    "selectedIconPlateDp": { "width": 52, "height": 32 },
-    "crossColumnIndicator": false,
-    "transition": "local-color-glass-rim-and-highlight-fade"
+    "labels": [
+      "首页",
+      "记录",
+      "计划",
+      "账本",
+      "我的"
+    ],
+    "equalWidth": false,
+    "iconAboveLabel": false,
+    "labelsAlwaysVisible": false,
+    "bodyMinimumHeightDp": 60,
+    "itemMinimumHeightDp": 50,
+    "iconSizeDp": 20,
+    "labelSizeSp": 14,
+    "crossColumnIndicator": true,
+    "transition": "220ms-moving-highlight-and-width",
+    "selectedItemRadiusDp": 25,
+    "largeFontFallback": "equal-icon-targets-with-current-label-below",
+    "minimumItemWidthDp": 48
   },
   "renderPolicy": "shared-glass-appearance-with-tiered-rendering-cost",
   "startingValues": {
-    "blurDp": 12,
-    "visualSamplingDisplacementDp": 2,
-    "rimDp": 0.75,
+    "selectedRimColors": [
+      "#839FE8",
+      "#B49BD9",
+      "#8EBEB6"
+    ],
+    "selectedRimAlphas": [
+      0.65,
+      0.7,
+      0.6
+    ],
+    "selectionChangesSize": false,
+    "blurDp": 14,
+    "visualSamplingDisplacementDp": 0,
+    "rimDp": 1,
     "shadowDp": 3,
-    "pressScale": 0.975,
-    "transitionMs": 220,
+    "pressScale": 0.98,
+    "transitionMs": 180,
     "springDampingRatio": 0.85,
     "decorativeMotionMaxMs": 0,
     "chromaticAberration": false
   },
   "light": {
     "tint": "#FFFFFF",
-    "tintTopAlpha": 0.62,
-    "tintBottom": "#F8FCFF",
-    "tintBottomAlpha": 0.4,
+    "tintTopAlpha": 0.78,
+    "tintBottom": "#F9FAFF",
+    "tintBottomAlpha": 0.52,
     "rim": "#FFFFFF",
     "rimAlpha": 0.93,
-    "edge": "#5474A0",
+    "edge": "#505FAC",
     "edgeAlpha": 0.15,
-    "selectedTop": "#FFFFFF",
-    "selectedTopAlpha": 0.86,
-    "selectedBottom": "#9FC3F5",
-    "selectedBottomAlpha": 0.53,
+    "selectedTop": "#F3F3FF",
+    "selectedTopAlpha": 0.94,
+    "selectedBottom": "#E1E6FA",
+    "selectedBottomAlpha": 0.52,
     "popoverBase": "#F3F9FF",
     "popoverBaseAlpha": 0.82,
-    "scene": ["#A8CEF2", "#C1E1DC", "#D7D4EF"],
+    "scene": [
+      "#D7E5F9",
+      "#E5DDF6",
+      "#DDEEEA"
+    ],
     "sceneAnimated": false
   },
   "dark": {
-    "tint": "#3D526F",
-    "tintTopAlpha": 0.66,
-    "tintBottom": "#1D2B40",
-    "tintBottomAlpha": 0.62,
+    "tint": "#252E42",
+    "tintTopAlpha": 0.94,
+    "tintBottom": "#252E42",
+    "tintBottomAlpha": 0.84,
     "rim": "#D2E7FF",
     "rimAlpha": 0.32,
     "edge": "#050F21",
     "edgeAlpha": 0.38,
-    "selectedTop": "#3B5A80",
-    "selectedTopAlpha": 0.52,
-    "selectedBottom": "#244B80",
-    "selectedBottomAlpha": 0.4,
+    "selectedTop": "#3C486D",
+    "selectedTopAlpha": 0.94,
+    "selectedBottom": "#3C486D",
+    "selectedBottomAlpha": 0.84,
     "popoverBase": "#1D2C43",
     "popoverBaseAlpha": 0.94,
-    "scene": ["#254D7B", "#284C52", "#433D69"],
+    "scene": [
+      "#35456E",
+      "#3F355D",
+      "#203F48"
+    ],
     "sceneAnimated": false
   },
   "readability": {
@@ -83,21 +136,78 @@
     "minimumTaskRowDp": 72
   },
   "tiers": {
-    "content": { "rendering": "static-scene-tint-gradient-dual-rim", "realtimeBackgroundSampling": false, "longTextMinimumTintAlpha": 0.82 },
-    "control": { "rendering": "glass-bevel-gradient-local-selection-press", "realtimeBackgroundSampling": false },
-    "floating": { "rendering": "readability-base-and-optional-shared-backdrop", "realtimeBackgroundSampling": "device-validated-only" }
+    "content": {
+      "rendering": "static-scene-tint-gradient-dual-rim",
+      "realtimeBackgroundSampling": false,
+      "longTextMinimumTintAlpha": 0.82
+    },
+    "control": {
+      "rendering": "glass-bevel-gradient-local-selection-press",
+      "realtimeBackgroundSampling": false
+    },
+    "floating": {
+      "rendering": "readability-base-and-optional-shared-backdrop",
+      "realtimeBackgroundSampling": "navigation-only-api31-and-not-solid"
+    }
   },
   "customPickers": {
     "systemVisualPicker": false,
-    "menu": { "anchorToTrigger": true, "minimumOptionHeightDp": 50, "selectedCheckmark": true, "keyboardNavigation": true },
-    "date": { "firstDayOfWeek": "Monday", "monthNavigation": true, "yearAndMonthPanel": true, "cancelDoesNotCommit": true, "commit": "explicit-confirm", "minimumCellDp": 48, "gridMinimumAvailableWidthDp": 348, "narrowOrLargeText": "seven-day-list", "todayCue": "underline-and-accessible-label", "eventCue": "dot-and-accessible-label" },
-    "time": { "clock": 24, "hourRange": [0,23], "minuteRange": [0,59], "minuteStep": 1, "minimumOptionHeightDp": 48, "commit": "explicit-confirm" },
+    "menu": {
+      "anchorToTrigger": true,
+      "minimumOptionHeightDp": 50,
+      "selectedCheckmark": true,
+      "keyboardNavigation": true
+    },
+    "date": {
+      "firstDayOfWeek": "Monday",
+      "monthNavigation": true,
+      "yearAndMonthPanel": true,
+      "cancelDoesNotCommit": true,
+      "commit": "explicit-confirm",
+      "minimumCellDp": 48,
+      "gridMinimumAvailableWidthDp": 348,
+      "narrowOrLargeText": "seven-day-list",
+      "todayCue": "underline-and-accessible-label",
+      "eventCue": "dot-and-accessible-label"
+    },
+    "time": {
+      "clock": 24,
+      "hourRange": [
+        0,
+        23
+      ],
+      "minuteRange": [
+        0,
+        59
+      ],
+      "minuteStep": 1,
+      "minimumOptionHeightDp": 48,
+      "commit": "explicit-confirm"
+    },
     "focus": "trap-active-layer-and-restore-trigger",
     "back": "dismiss-top-picker-before-editor",
     "androidFoundation": "Compose-Popup-Dialog-LazyColumn-selectable-semantics",
-    "androidImplementationStatus": "pending"
+    "androidImplementationStatus": "native-existing-pickers-rethemed"
   },
-  "candidateBudget": { "sharedCaptureSourcesPerPage": 1, "activeRealtimeRegions": 2 },
-  "preview": { "file": "daily-glass-refined.html", "renderer": "css", "surfaceBlurPx": 22, "saturation": 1.3, "navigationBlurPx": 16, "calendarGridMinimumContainerPx": 348, "opticalRefraction": false, "samplingPolicyMatchesAndroidBudget": false },
-  "nativeBackendInstalled": false
+  "candidateBudget": {
+    "sharedCaptureSourcesPerPage": 1,
+    "activeRealtimeRegions": 1
+  },
+  "preview": {
+    "file": "daily-glass-refined.html",
+    "renderer": "css",
+    "surfaceBlurPx": 22,
+    "saturation": 1.3,
+    "navigationBlurPx": 16,
+    "calendarGridMinimumContainerPx": 348,
+    "opticalRefraction": false,
+    "samplingPolicyMatchesAndroidBudget": false
+  },
+  "nativeBackendInstalled": true,
+  "nativeBackend": "dev.chrisbanes.haze:haze:1.6.10",
+  "shapePolicy": {
+    "button": "pill-radius-half-height",
+    "filter": "pill-radius-half-height",
+    "iconAction": "circle"
+  }
 }

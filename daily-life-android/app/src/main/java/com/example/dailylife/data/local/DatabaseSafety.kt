@@ -10,7 +10,7 @@ object DatabaseSafety {
         if(!file.exists()) return
         SQLiteDatabase.openDatabase(file.absolutePath,null,SQLiteDatabase.OPEN_READWRITE).use {sqlite->
             val oldVersion=sqlite.version
-            if(oldVersion !in 1..2) return
+            if(oldVersion !in 1..3) return
             sqlite.rawQuery("PRAGMA wal_checkpoint(TRUNCATE)",null).use {c->
                 require(c.moveToFirst() && c.getInt(0)==0) {"旧数据库正忙，暂缓升级；原数据保留"}
             }

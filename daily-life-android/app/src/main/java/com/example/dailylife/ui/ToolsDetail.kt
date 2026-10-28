@@ -25,35 +25,56 @@ import java.time.*
     var payChild by remember {mutableStateOf<ToolChild?>(null)}
     BackHandler {vm.detail(null)}
     Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()) {
-        Row(Modifier.fillMaxWidth().padding(horizontal=8.dp),verticalAlignment=Alignment.CenterVertically) {TextButton(onClick={vm.detail(null)},modifier=Modifier.testTag("backToolDetail")) {Text("返回")};Text(toolKinds.find {it.first==e.kind}?.second ?: "清单模板",Modifier.weight(1f),style=MaterialTheme.typography.titleLarge);if(!deleted) TextButton(enabled=!ui.busy,onClick={vm.begin(e.kind,e.id)}) {Text("编辑")}}
+        GlassPageHeader(if(e.isClothing()) "衣物" else toolKinds.find {it.first==e.kind}?.second ?: "清单模板",back={vm.detail(null)},backTag="backToolDetail") {if(!deleted) TextButton(enabled=!ui.busy,onClick={vm.begin(e.kind,e.id)}) {Text("编辑")}}
         Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(20.dp),verticalArrangement=Arrangement.spacedBy(14.dp)) {
-            Text(e.title,style=MaterialTheme.typography.headlineMedium)
-            Text(toolSummary(e,ui.data,ui.hideAmounts),color=LocalGlass.current.accent)
-            if(e.field("reminderOn")=="true") {val reminders=plans.reminders.filter {it.sourceType=="tool" && it.sourceId==e.id};Text("系统提醒："+when {reminders.any {it.state=="blocked"}->"通知权限未开启，配置仍保留";reminders.any {it.state=="scheduled"}->"已提交非精确排程";reminders.any {it.state=="failed"}->"排程失败，稍后重新核对";else->"没有未来可排程日期"},color=LocalGlass.current.muted);TextButton(onClick={open("feature","notifications")}) {Text("检查通知设置")}}
+            Row(verticalAlignment=Alignment.CenterVertically) {
+                Text(e.title,Modifier.weight(1f),style=MaterialTheme.typography.headlineMedium)
+                if(!deleted) GlassFavorite(e.isFavorite(),!ui.busy) {vm.run(null) {manage(e.id,"favorite")}}
+            }
+            val photos=toolPhotos(e,ui.data,ui.records)
+            if(e.pinned) Text("置顶",color=LocalGlass.current.accent,style=MaterialTheme.typography.labelMedium)
+            if(photos.isNotEmpty()) ToolPhotoGallery(photos,vm.repository.records.files,view)
+            else if(e.kind in setOf("item","outfit") && !deleted) GlassPanel(Modifier.fillMaxWidth().clickable(enabled=!ui.busy) {vm.begin(e.kind,e.id)}) {
+                Row(Modifier.padding(16.dp),verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(16.dp)) {
+                    ToolPhotoArtwork(e.kind=="outfit",e.isClothing(),Modifier.size(64.dp))
+                    Column {Text("添加照片",style=MaterialTheme.typography.titleMedium);Text("编辑后选择本机照片",color=LocalGlass.current.muted,style=MaterialTheme.typography.bodySmall)}
+                }
+            }
+            if(e.isClothing()) {
+                clothingHint(e).takeIf {it.isNotBlank()}?.let {Text(it,color=LocalGlass.current.muted)}
+                val details=listOf("size" to "尺码","material" to "材质","warmth" to "温度偏好").mapNotNull {(key,label)->e.field(key).ifBlank {null}?.let {label to (if(key=="warmth") clothingWarmth[it].orEmpty() else it)}}
+                if(details.isNotEmpty()) GlassFormSection("衣物资料","clothing-details") {details.forEach {(label,value)->GlassInfoRow(label,value)}}
+            }
+            if(e.kind=="item") listOf("expiry" to "有效期","careDate" to "下次养护").forEach {(key,label)->if(e.field(key).isNotBlank()) Text(label+" · "+e.field(key))}
+            ToolDetailSummary(e,ui.data,ui.hideAmounts)
+            if(e.kind=="outfit" || e.isClothing()) WardrobeDetailLabels(e,ui.data) {vm.detail(it)}
+            if(e.field("reminderOn")=="true") {val reminders=plans.reminders.filter {it.sourceType=="tool" && it.sourceId==e.id};Text("系统提醒："+when {reminders.any {it.state=="blocked"}->"通知权限未开启，配置仍保留";reminders.any {it.state=="scheduled"}->"已安排，实际精度请查看提醒中心";reminders.any {it.state=="failed"}->"排程失败，稍后重新核对";else->"没有未来可排程日期"},color=LocalGlass.current.muted);TextButton(onClick={open("feature","notifications")}) {Text("检查通知设置")}}
             if(deleted) Text("已在回收站，恢复后可继续管理。",color=MaterialTheme.colorScheme.error)
             if(e.note.isNotBlank()) GlassPanel(Modifier.fillMaxWidth()) {Column(Modifier.padding(16.dp)) {MarkdownBody(e.note)}}
             when(e.kind) {
                 "checklist","checklist_template"->{val children=ui.data.children.filter {it.entryId==e.id};if(children.isNotEmpty() && children.all {it.completedAt!=null} && e.state!="done") Text("条目已全部完成，可以确认完成整张清单。",color=LocalGlass.current.accent)
-                    if(!deleted) {Row(Modifier.horizontalScroll(rememberScrollState())) {Button(onClick={addChild=true},enabled=!ui.busy) {Text("添加条目")};TextButton(onClick={batch=true}) {Text("批量添加")};TextButton(onClick={action="reset"}) {Text("重置勾选")}}
+                    if(!deleted) {Row(Modifier.horizontalScroll(rememberScrollState())) {GlassButton(onClick={addChild=true},enabled=!ui.busy) {Text("添加条目")};TextButton(onClick={batch=true}) {Text("批量添加")};TextButton(onClick={action="reset"}) {Text("重置勾选")}}
                         Row(Modifier.horizontalScroll(rememberScrollState())) {TextButton(onClick={vm.run("已复制",onSuccess={}) {val id=copy(e.id);vm.detail(id)}}) {Text(if(e.kind=="checklist_template") "从模板创建清单" else "复制清单")};if(e.kind!="checklist_template") TextButton(onClick={vm.run("已保存为模板") {copy(e.id,true)}}) {Text("保存为模板")};TextButton(onClick={vm.run("状态已更新") {manage(e.id,"complete")}}) {Text(if(e.state=="done") "重新打开" else "确认完成整单")}}
                     }
                     if(children.isEmpty()) ToolEmpty("清单还是空的","逐项添加，或按每行一项批量输入。")
                     children.groupBy {it.groupName}.forEach {(group,list)->var expanded by rememberSaveable(e.id,group) {mutableStateOf(true)};if(group.isNotBlank()) TextButton(onClick={expanded=!expanded}) {Text(group+(if(expanded) " ▴" else " ▾"))};if(expanded) list.forEach {c->GlassPanel(Modifier.fillMaxWidth()) {Column(Modifier.padding(12.dp)) {
-                        Row(verticalAlignment=Alignment.CenterVertically) {Checkbox(c.completedAt!=null,{vm.run("已更新") {childAction(c.id,"toggle")}},enabled=!deleted && !ui.busy,modifier=Modifier.testTag("toolCheck:"+c.id));Column(Modifier.weight(1f)) {Text(c.title,style=MaterialTheme.typography.titleMedium);if(c.quantityMilli!=null) Text(ToolRules.number(c.quantityMilli)+" "+c.unit,color=LocalGlass.current.muted);if(c.note.isNotBlank()) Text(c.note,color=LocalGlass.current.muted)}}
+                        Row(verticalAlignment=Alignment.CenterVertically) {GlassCheckbox(c.completedAt!=null,{vm.run("已更新") {childAction(c.id,"toggle")}},enabled=!deleted && !ui.busy,modifier=Modifier.testTag("toolCheck:"+c.id));Column(Modifier.weight(1f)) {Text(c.title,style=MaterialTheme.typography.titleMedium);if(c.quantityMilli!=null) Text(ToolRules.number(c.quantityMilli)+" "+c.unit,color=LocalGlass.current.muted);if(c.note.isNotBlank()) Text(c.note,color=LocalGlass.current.muted)}}
                         if(!deleted) Row(Modifier.horizontalScroll(rememberScrollState())) {TextButton(onClick={childEdit=c}) {Text("编辑")};TextButton(onClick={vm.run {childAction(c.id,"up")}}) {Text("上移")};TextButton(onClick={vm.run {childAction(c.id,"down")}}) {Text("下移")};TextButton(onClick={action="child:"+c.id}) {Text("删除")}}
                         if(e.kind!="checklist_template") ToolChildExpenseActions(c,ui,ledger,deleted,open,{payChild=c},{action="childDetach:"+c.id})
                     }}}}
                 }
-                "anniversary"->{Text("原始日期："+e.field("date"));Text("下一次："+(ui.data.nextDate(e)?.toString() ?: "暂无"));Text(if(e.field("repeat")=="yearly") "每年重复，保留原始年份。" else "单次日期，过去的日期仍会保留。",color=LocalGlass.current.muted)}
-                "item"->{listOf("category" to "分类","location" to "位置","brand" to "品牌","model" to "型号","date" to "购买日期","amount" to "购买金额（元）","warranty" to "保修截止日","soldDate" to "出售日期","soldAmount" to "出售金额（元）").forEach {(key,label)->e.field(key).takeIf {it.isNotBlank()}?.let {Text("$label："+if(ui.hideAmounts && key in listOf("amount","soldAmount")) "••••" else it)}}
+                "anniversary"->{GlassInfoRow("原始日期",e.field("date"));GlassInfoRow("下一次",ui.data.nextDate(e)?.toString() ?: "暂无");Text(if(e.field("repeat")=="yearly") "每年重复，保留原始年份。" else "单次日期，过去的日期仍会保留。",color=LocalGlass.current.muted)}
+                "item"->{val itemFields=listOf("category" to "分类","location" to "位置","brand" to "品牌","model" to "型号","date" to "购买日期","amount" to "购买金额（元）","warranty" to "保修截止日","soldDate" to "出售日期","soldAmount" to "出售金额（元）").filter {e.field(it.first).isNotBlank()}
+                    if(itemFields.isNotEmpty() || e.field("serial").isNotBlank()) GlassFormSection("物品资料","item-details") {itemFields.forEach {(key,label)->GlassInfoRow(label,if(ui.hideAmounts && key in listOf("amount","soldAmount")) "••••" else e.field(key))}
                     if(e.field("serial").isNotBlank()) Row(verticalAlignment=Alignment.CenterVertically) {Text("序列号："+if(e.field("privateSerial","true")=="true" && !privateShown) "••••••" else e.field("serial"),Modifier.weight(1f));TextButton(onClick={privateShown=!privateShown}) {Text(if(privateShown) "隐藏" else "查看")}}
+                    }
                     ToolItemTransactions(e,ui,vm,ledger,open)
-                    SectionLabel("维修记录");if(!deleted) Button(onClick={addChild=true}) {Text("添加维修")}
+                    SectionLabel("维修记录");if(!deleted) GlassButton(onClick={addChild=true}) {Text("添加维修")}
                     ui.data.children.filter {it.entryId==e.id}.forEach {c->GlassPanel(Modifier.fillMaxWidth()) {Column(Modifier.padding(16.dp)) {Text(c.date.orEmpty()+" · "+c.title);if(c.note.isNotBlank()) Text(c.note);if(!deleted) Row {TextButton(onClick={childEdit=c}) {Text("编辑")};TextButton(onClick={action="child:"+c.id}) {Text("删除")}};ToolChildExpenseActions(c,ui,ledger,deleted,open,{payChild=c},{action="childDetach:"+c.id})}}}
                     val loans=ui.data.entries.filter {it.kind=="loan" && it.field("item")==e.id && it.deletedAt==null};if(loans.isNotEmpty()) SectionLabel("关联借还");loans.forEach {l->TextButton(onClick={vm.detail(l.id)}) {Text(l.title+" · 剩余 "+ToolRules.number(ui.data.remaining(l)))}}
                 }
-                "loan"->{Text("起始日期："+e.field("date"));Text("原数量："+e.field("quantity","1")+" "+e.field("unit","件"));if(e.field("end").isNotBlank()) Text("预计归还："+e.field("end"));e.field("item").takeIf {it.isNotBlank()}?.let {id->TextButton(onClick={vm.detail(id)}) {Text("查看关联物品")}}
-                    if(!deleted && e.state!="cancelled") {Row {Button(onClick={addReturn=true},enabled=ui.data.remaining(e)>0 && !ui.busy) {Text("登记归还")};TextButton(onClick={postpone=true}) {Text("调整归还日期")}}}
+                "loan"->{GlassInfoRow("起始日期",e.field("date"));GlassInfoRow("原数量",e.field("quantity","1")+" "+e.field("unit","件"));if(e.field("end").isNotBlank()) GlassInfoRow("预计归还",e.field("end"));e.field("item").takeIf {it.isNotBlank()}?.let {id->TextButton(onClick={vm.detail(id)}) {Text("查看关联物品")}}
+                    if(!deleted && e.state!="cancelled") {Row {GlassButton(onClick={addReturn=true},enabled=ui.data.remaining(e)>0 && !ui.busy) {Text("登记归还")};TextButton(onClick={postpone=true}) {Text("调整归还日期")}}}
                     SectionLabel("归还与延期历史");ui.data.logs.filter {it.entryId==e.id && it.kind in listOf("return","postpone")}.forEach {l->GlassPanel(Modifier.fillMaxWidth()) {Column(Modifier.padding(16.dp)) {Text(l.date+" · "+if(l.kind=="return") "归还 "+ToolRules.number(l.quantityMilli)+" "+e.field("unit","件") else "延期");if(l.note.isNotBlank()) Text(l.note,color=LocalGlass.current.muted);if(l.kind=="return" && !deleted) Row {TextButton(onClick={logEdit=l}) {Text("编辑")};TextButton(onClick={action="return:"+l.id}) {Text("撤销本次归还")}}}}}
                     if(!deleted) TextButton(onClick={action="cancel"}) {Text(if(e.state=="cancelled") "恢复借还" else "取消借还，保留历史")}
                 }
@@ -77,14 +98,15 @@ import java.time.*
                     SectionLabel("费用规则历史");ui.data.logs.filter {it.entryId==e.id && it.kind=="payment_version"}.forEach {l->val p=org.json.JSONObject(l.payload);Text(l.date+" 起 · ¥"+(if(ui.hideAmounts) "••••" else p.optString("amount","待确认"))+" · "+p.optString("cycle"),color=LocalGlass.current.muted)}
                 }
                 "project"->ToolProject(e,ui,vm,ledger,plans,open)
+                "outfit"->OutfitDetail(e,ui,vm,open)
             }
-            ui.records.attachmentsFor("tool",e.id).forEach {a->TextButton(onClick={view(a)},modifier=Modifier.fillMaxWidth()) {Text("附件 · "+a.displayName)}}
-            if(deleted) {Button(enabled=!ui.busy,onClick={vm.run("已恢复") {manage(e.id,"restore")}}) {Text("恢复")};TextButton(onClick={action="forever"}) {Text("永久删除")}}
+            ui.records.attachmentsFor("tool",e.id).filterNot {it.mime.startsWith("image/")}.forEach {a->TextButton(onClick={view(a)},modifier=Modifier.fillMaxWidth()) {Text("附件 · "+a.displayName)}}
+            if(deleted) {GlassButton(enabled=!ui.busy,onClick={vm.run("已恢复") {manage(e.id,"restore")}}) {Text("恢复")};TextButton(onClick={action="forever"}) {Text("永久删除")}}
             else {HorizontalDivider();Row(Modifier.horizontalScroll(rememberScrollState())) {TextButton(onClick={vm.run {manage(e.id,"pin")}}) {Text(if(e.pinned) "取消置顶" else "置顶")};TextButton(onClick={vm.run {manage(e.id,if(e.archivedAt==null) "archive" else "unarchive")}}) {Text(if(e.archivedAt==null) "归档" else "取消归档")};TextButton(onClick={action="trash"}) {Text("移入回收站")}}}
         }
     }
     if(addChild || childEdit!=null) ToolChildSheet(e,childEdit,ui.busy,{addChild=false;childEdit=null}) {title,q,unit,group,note,date,cost->vm.run("已保存",onSuccess={addChild=false;childEdit=null}) {child(e.id,title,q,unit,group,note,childEdit?.id,date,cost)}}
-    if(batch) {var value by remember {mutableStateOf("")};var group by remember {mutableStateOf("")};GlassSheet("批量添加条目",{batch=false}) {ToolField("每行一项，最多100项",value,{value=it},single=false);ToolField("这些条目的分组（可选）",group,{group=it});Button(enabled=!ui.busy,onClick={vm.run("条目已添加",onSuccess={batch=false}) {batchChildren(e.id,value,group)}}) {Text("添加这些条目")}}}
+    if(batch) {var value by remember {mutableStateOf("")};var group by remember {mutableStateOf("")};GlassSheet("批量添加条目",{batch=false}) {ToolField("每行一项，最多100项",value,{value=it},single=false);ToolField("这些条目的分组（可选）",group,{group=it});GlassButton(enabled=!ui.busy,onClick={vm.run("条目已添加",onSuccess={batch=false}) {batchChildren(e.id,value,group)}}) {Text("添加这些条目")}}}
     if(addReturn || logEdit!=null) ToolReturnSheet(e,logEdit,ui.busy,{addReturn=false;logEdit=null}) {date,q,note->vm.run("归还已登记",onSuccess={addReturn=false;logEdit=null}) {returned(e.id,date,q,note,logEdit?.id)}}
     if(postpone) CalendarDialog(e.field("end"),{postpone=false}) {d->vm.run("归还日期已调整",onSuccess={postpone=false}) {postpone(e.id,d)}}
     pay?.let {p->ToolPaySheet(p,ui,vm,ledger) {pay=null}}
@@ -92,7 +114,7 @@ import java.time.*
     adjust?.let {p->ToolPeriodSheet(p,ui.busy,{adjust=null}) {date,amount,start,end->vm.run("本期已更新",onSuccess={adjust=null}) {adjustPeriod(p.id,date,amount,start,end)}}}
     action?.let {a->if(a.startsWith("childDetach:")) ConfirmDialog("解除条目支出关联？","原账目、已录入的费用与日期都会保留。解除后可重新关联，避免再创建重复支出。",{action=null},{vm.run("关联已解除，原账目保留",onSuccess={action=null}) {detachChildExpense(a.substringAfter(":"))}})
         else if(a.startsWith("detach:")) GlassSheet("解除付款账目关联",{action=null}) {Text("原账目会保留，请选择本期状态。")
-        Button(onClick={vm.run("已解除关联，保留已付") {detachSettlement(a.substringAfter(":"),true)};action=null}) {Text("保留已付状态")};TextButton(onClick={vm.run("已解除关联，回到待处理") {detachSettlement(a.substringAfter(":"),false)};action=null}) {Text("撤销结算回待处理")}}
+        GlassButton(onClick={vm.run("已解除关联，保留已付") {detachSettlement(a.substringAfter(":"),true)};action=null}) {Text("保留已付状态")};TextButton(onClick={vm.run("已解除关联，回到待处理") {detachSettlement(a.substringAfter(":"),false)};action=null}) {Text("撤销结算回待处理")}}
         else ConfirmDialog("确认操作",when {a=="trash"->"内容进入回收站；原账目与被专题关联的原内容会保留。";a=="forever"->"永久删除不可撤销，仍有关系时会阻止。";a=="reset"->"清除当前勾选，条目本身保留。";a=="cancel"->"更改当前状态，历史日志与付款记录保留。";else->"确认处理当前条目？"},{action=null},{vm.run("已更新",onSuccess={if(a=="trash" || a=="forever") vm.detail(null)}) {when {a=="forever"->deleteForever(e.id);a=="reset"->reset(e.id);a.startsWith("child:")->childAction(a.substringAfter(":"),"delete");a.startsWith("return:")->removeLog(a.substringAfter(":"));a.startsWith("skip:")->skipPeriod(a.substringAfter(":"));a.startsWith("reopen:")->reopenPeriod(a.substringAfter(":"));else->manage(e.id,a)}}})}
 }
 @Composable private fun ToolChildSheet(e:ToolEntry,old:ToolChild?,busy:Boolean,dismiss:()->Unit,save:(String,String,String,String,String,String?,String)->Unit) {
@@ -104,7 +126,7 @@ import java.time.*
         if(hasCost) {if(old?.expenseId!=null) Text("已关联支出，修改金额或日期需先解除关联。",color=LocalGlass.current.muted)
             ToolDate(if(e.kind=="item") "维修日期" else "购买日期",date,{if(old?.expenseId==null) picker=true});ToolField("费用（元，可选）",cost,{cost=it},enabled=old?.expenseId==null)}
         ToolField(if(e.kind=="item") "服务商与备注" else "备注",note,{note=it},single=false)
-        Button(enabled=!busy,onClick={save(title,q,unit,group,note,if(hasCost) date.ifBlank {null} else old?.date,cost)}) {Text("保存条目")}
+        GlassButton(enabled=!busy,onClick={save(title,q,unit,group,note,if(hasCost) date.ifBlank {null} else old?.date,cost)}) {Text("保存条目")}
     };if(picker) CalendarDialog(date,{picker=false}) {date=it;picker=false}
 }
 @Composable private fun ToolChildExpenseActions(child:ToolChild,ui:ToolsUi,ledger:LedgerSnapshot,deleted:Boolean,open:(String,String)->Unit,pay:()->Unit,detach:()->Unit) {
@@ -132,10 +154,10 @@ import java.time.*
             val expenses=ledger.transactions.filter {it.type=="expense" && it.deletedAt==null && it.ledgerId==ledgerId && ui.data.children.none {c->c.expenseId==it.id} && ui.data.settlements.none {s->s.expenseId==it.id}}
             ToolPicker("已有支出",ledger.transactions.find {it.id==existing}?.subject?.ifBlank {"已选支出"} ?: "请选择",expenses.map {it.id to (it.occurredOn+" · ¥"+toolMoney(it.amountMinor,ui.hideAmounts)+" · "+it.subject)},existing) {id->existing=id;expenses.find {it.id==id}?.let {amount=ToolRules.money(it.amountMinor);date=it.occurredOn}}
         }
-        Button(enabled=!ui.busy && (mode!="existing" || existing.isNotBlank()),onClick={vm.settleChildExpense(child.id,amount,date,existing.takeIf {mode=="existing"},ledgerId,account.ifBlank {null},category.ifBlank {null})},modifier=Modifier.fillMaxWidth().testTag("saveChildExpense")) {Text("确认支出并关联")}
+        GlassButton(enabled=!ui.busy && (mode!="existing" || existing.isNotBlank()),onClick={vm.settleChildExpense(child.id,amount,date,existing.takeIf {mode=="existing"},ledgerId,account.ifBlank {null},category.ifBlank {null})},modifier=Modifier.fillMaxWidth().testTag("saveChildExpense")) {Text("确认支出并关联")}
     };if(picker) CalendarDialog(date,{picker=false}) {date=it;picker=false}
 }
-@Composable private fun ToolReturnSheet(e:ToolEntry,old:ToolLog?,busy:Boolean,dismiss:()->Unit,save:(String,String,String)->Unit) {var date by remember {mutableStateOf(old?.date ?: LocalDate.now().toString())};var q by remember {mutableStateOf(old?.quantityMilli?.let(ToolRules::number) ?: "1")};var note by remember {mutableStateOf(old?.note.orEmpty())};var picker by remember {mutableStateOf(false)};GlassSheet("登记归还",dismiss) {ToolDate("归还日期",date,{picker=true});ToolField("本次归还数量（"+e.field("unit","件")+"）",q,{q=it});ToolField("备注",note,{note=it});Button(enabled=!busy,onClick={save(date,q,note)}) {Text("保存归还记录")}};if(picker) CalendarDialog(date,{picker=false}) {date=it;picker=false}}
+@Composable private fun ToolReturnSheet(e:ToolEntry,old:ToolLog?,busy:Boolean,dismiss:()->Unit,save:(String,String,String)->Unit) {var date by remember {mutableStateOf(old?.date ?: LocalDate.now().toString())};var q by remember {mutableStateOf(old?.quantityMilli?.let(ToolRules::number) ?: "1")};var note by remember {mutableStateOf(old?.note.orEmpty())};var picker by remember {mutableStateOf(false)};GlassSheet("登记归还",dismiss) {ToolDate("归还日期",date,{picker=true});ToolField("本次归还数量（"+e.field("unit","件")+"）",q,{q=it});ToolField("备注",note,{note=it});GlassButton(enabled=!busy,onClick={save(date,q,note)}) {Text("保存归还记录")}};if(picker) CalendarDialog(date,{picker=false}) {date=it;picker=false}}
 @Composable private fun ToolPaySheet(p:ToolPaymentPeriod,ui:ToolsUi,vm:ToolsViewModel,ledger:LedgerSnapshot,dismiss:()->Unit) {
     val source=ui.data.entries.first {it.id==p.sourceId};val previous=ui.data.settlements.find {it.periodId==p.id};val supplement=p.status=="paid"
     var mode by remember(p.id) {mutableStateOf(if(supplement) "new" else "status")};var amount by remember(p.id) {mutableStateOf((previous?.actualMinor ?: p.expectedMinor)?.let(ToolRules::money) ?: "")};var date by remember(p.id) {mutableStateOf(previous?.paidOn ?: LocalDate.now().toString())};var picker by remember {mutableStateOf(false)}
@@ -147,11 +169,11 @@ import java.time.*
         if(mode!="status") {ToolPicker("账本",ledger.ledgers.find {it.id==ledgerId}?.name ?: "请选择",ledger.ledgers.filter {it.archivedAt==null}.map {it.id to it.name},ledgerId) {ledgerId=it;existing=""}}
         if(mode=="new") {ToolPicker("账户",ledger.accounts.find {it.id==account}?.name ?: "不指定",listOf("" to "不指定")+ledger.accounts.filter {it.archivedAt==null}.map {it.id to it.name},account) {account=it};ToolPicker("支出分类",ledger.categories.find {it.id==category}?.name ?: "未分类",listOf("" to "未分类")+ledger.categories.filter {it.direction=="expense" && it.active}.map {it.id to it.name},category) {category=it}}
         if(mode=="existing") {val expenses=ledger.transactions.filter {it.type=="expense" && it.deletedAt==null && it.ledgerId==ledgerId && ui.data.settlements.none {s->s.expenseId==it.id} && ui.data.children.none {c->c.expenseId==it.id} && (!supplement || it.amountMinor==previous?.actualMinor && it.occurredOn==previous?.paidOn)};ToolPicker("已有支出",ledger.transactions.find {it.id==existing}?.subject ?: "请选择",expenses.map {it.id to (it.occurredOn+" · ¥"+toolMoney(it.amountMinor,ui.hideAmounts)+" · "+it.subject)},existing) {id->existing=id;expenses.find {it.id==id}?.let {amount=ToolRules.money(it.amountMinor);date=it.occurredOn}}}
-        Button(enabled=!ui.busy && (mode!="existing" || existing.isNotBlank()),onClick={if(mode=="status") vm.run("已登记付款") {settleOnly(p.id,amount,date)} else vm.settleExpense(p.id,amount,date,if(mode=="existing") existing else null,ledgerId,account.ifBlank {null},category.ifBlank {null})},modifier=Modifier.fillMaxWidth()) {Text(if(supplement) "确认补充原付款账目" else "确认本期付款")}
+        GlassButton(enabled=!ui.busy && (mode!="existing" || existing.isNotBlank()),onClick={if(mode=="status") vm.run("已登记付款") {settleOnly(p.id,amount,date)} else vm.settleExpense(p.id,amount,date,if(mode=="existing") existing else null,ledgerId,account.ifBlank {null},category.ifBlank {null})},modifier=Modifier.fillMaxWidth()) {Text(if(supplement) "确认补充原付款账目" else "确认本期付款")}
     };if(picker) CalendarDialog(date,{picker=false}) {date=it;picker=false}
 }
 @Composable private fun ToolPeriodSheet(period:ToolPaymentPeriod,busy:Boolean,dismiss:()->Unit,save:(String,String,String,String)->Unit) {
     var amount by remember(period.id) {mutableStateOf(period.expectedMinor?.let(ToolRules::money).orEmpty())};var date by remember(period.id) {mutableStateOf(period.dueDate)};var start by remember(period.id) {mutableStateOf(period.periodStart)};var end by remember(period.id) {mutableStateOf(period.periodEnd)};var picker by remember {mutableStateOf<String?>(null)}
-    GlassSheet("调整本期",dismiss) {ToolDate("所属期开始",start,{picker="start"});ToolDate("所属期结束",end,{picker="end"});ToolDate("截止日期",date,{picker="due"});ToolField("预计金额（元，可空）",amount,{amount=it});Text("仅调整本期，原周期键保持不变，刷新不会覆盖这次调整。",color=LocalGlass.current.muted);Button(enabled=!busy,onClick={save(date,amount,start,end)}) {Text("保存本期")}}
+    GlassSheet("调整本期",dismiss) {ToolDate("所属期开始",start,{picker="start"});ToolDate("所属期结束",end,{picker="end"});ToolDate("截止日期",date,{picker="due"});ToolField("预计金额（元，可空）",amount,{amount=it});Text("仅调整本期，原周期键保持不变，刷新不会覆盖这次调整。",color=LocalGlass.current.muted);GlassButton(enabled=!busy,onClick={save(date,amount,start,end)}) {Text("保存本期")}}
     picker?.let {key->CalendarDialog(when(key) {"start"->start;"end"->end;else->date},{picker=null}) {when(key) {"start"->start=it;"end"->end=it;else->date=it};picker=null}}
 }

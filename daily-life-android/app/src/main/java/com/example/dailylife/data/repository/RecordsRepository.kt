@@ -8,7 +8,8 @@ import com.example.dailylife.data.local.*
 import com.example.dailylife.data.local.Record
 import com.example.dailylife.feature.records.EditorData
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -21,22 +22,31 @@ data class RecordsSnapshot(
     val drafts: List<Draft> = emptyList(), val attachments: List<Attachment> = emptyList(),
     val links: List<AttachmentLink> = emptyList(), val templates: List<ContentTemplate> = emptyList()
 ) {
+    private val attachmentIndex = attachments.associateBy { it.id }
+    private val linkIndex = links.groupBy { it.entityType to it.entityId }
     fun title(record: RecordBundle) = record.displayTitle(attachmentsFor("record", record.record.id).firstOrNull()?.displayName)
     fun attachmentsFor(type: String, id: String): List<Attachment> {
-        val refs = links.filter { it.entityType == type && it.entityId == id }.sortedBy { it.sortOrder }
-        return refs.mapNotNull { ref -> attachments.find { it.id == ref.attachmentId } }
+        val refs = linkIndex[type to id].orEmpty().sortedBy { it.sortOrder }
+        return refs.mapNotNull { ref -> attachmentIndex[ref.attachmentId] }
     }
 }
 
-class RecordsRepository(val db: DailyLifeDatabase, val files: AttachmentStore) {
+class RecordsRepository(val db: DailyLifeDatabase, val files: AttachmentStore, private val beforeOpen: () -> Unit = {}) {
     val dao = db.records()
     val writes = Mutex()
     private val head = combine(dao.observeRecords(), dao.observeTypes(), dao.observeFolders(),
         dao.observeTags(), dao.observeDrafts()) { r, t, f, g, d -> RecordsSnapshot(r, t, f, g, d) }
-    val snapshot = combine(head, dao.observeAttachments(), dao.observeAttachmentLinks(),
-        dao.observeTemplates()) { h, a, l, t -> h.copy(attachments = a, links = l, templates = t) }
+    val snapshot = flow {
+        initialize()
+        emitAll(combine(head, dao.observeAttachments(), dao.observeAttachmentLinks(),
+            dao.observeTemplates()) { h, a, l, t -> h.copy(attachments = a, links = l, templates = t) }
+            .distinctUntilChanged())
+    }.flowOn(Dispatchers.IO)
 
+    private var initialized = false
     suspend fun initialize() = writes.withLock { withContext(Dispatchers.IO) {
+        if (initialized) return@withContext
+        beforeOpen()
         db.withTransaction {
             if (dao.profile() == null) {
                 val owner = newId(); dao.insertProfile(LocalProfile(owner))
@@ -55,11 +65,12 @@ class RecordsRepository(val db: DailyLifeDatabase, val files: AttachmentStore) {
             }
         }
         files.recoverStaging()
+        initialized = true
     } }
     suspend fun owner(): String = dao.profile()?.id ?: error("本地资料尚未初始化")
     suspend fun newDraft(typeId: String, target: String? = null, template: ContentTemplate? = null): Draft =
         writes.withLock { db.withTransaction {
-            if (target != null) dao.drafts().firstOrNull { it.targetId == target }?.let { return@withTransaction it }
+            if (target != null) dao.drafts().filter { it.targetId == target }.maxByOrNull { it.savedAt }?.let { return@withTransaction it }
             val original = target?.let { dao.record(it) }
             require(target == null || original != null && original.record.deletedAt == null) { "记录已删除或不存在" }
             val data = if (original == null) {
@@ -72,7 +83,7 @@ class RecordsRepository(val db: DailyLifeDatabase, val files: AttachmentStore) {
                 original.record.title, original.body, original.bookmark?.url ?: "",
                 original.diary?.diaryDate ?: LocalDate.now().toString(), original.diary?.mood ?: "",
                 original.record.folderId, original.tagLinks.filter { it.entityType == "record" }.map { it.tagId }.toSet(),
-                original.record.organizationStatus == "organized", original.fields.sortedBy { it.sortOrder })
+                original.record.organizationStatus == "organized", original.fields.sortedBy { it.sortOrder }, presentation=original.record.presentation)
             val draft = Draft(newId(), owner(), target, payload = data.json(), savedAt = System.currentTimeMillis())
             dao.putDraft(draft)
             if (original != null) dao.putLinks(dao.linksFor("record", original.record.id).map {
@@ -81,7 +92,26 @@ class RecordsRepository(val db: DailyLifeDatabase, val files: AttachmentStore) {
             draft
         } }
     suspend fun saveDraft(id: String, data: EditorData) = writes.withLock {
-        dao.draft(id)?.let { dao.putDraft(it.copy(payload = data.json(), savedAt = System.currentTimeMillis())) }
+        val draft = dao.draft(id) ?: error("草稿已关闭，请重新编辑")
+        dao.putDraft(draft.copy(payload = data.json(), savedAt = System.currentTimeMillis()))
+    }
+    /** Shared by domain commits while holding the write coordinator; failure keeps the draft intact. */
+    internal suspend fun requireAvailableAttachments(refs: List<AttachmentLink>) = withContext(Dispatchers.IO) {
+        val owner = owner()
+        refs.map { ref ->
+            val attachment = dao.attachment(ref.attachmentId) ?: error("附件信息缺失，请重新选择或移除")
+            val file = files.file(attachment)
+            require(attachment.ownerId == owner && attachment.status == "available" &&
+                file.isFile && file.length() == attachment.size) { "附件原件缺失或损坏，请重新选择或移除后保存" }
+            attachment
+        }
+    }
+    /** Cancellation can arrive after the DB commit: never remove an original whose metadata committed. */
+    internal suspend fun cleanupUncommittedOriginals(published: List<java.io.File>) = withContext(NonCancellable + Dispatchers.IO) {
+        published.forEach { file -> runCatching {
+            require(file.canonicalFile.parentFile == files.root.canonicalFile)
+            if (dao.attachment(file.nameWithoutExtension) == null) file.delete()
+        } }
     }
     suspend fun importAttachment(uri: Uri, draftId: String): Attachment = writes.withLock {
         require(dao.draft(draftId) != null) { "草稿已关闭，请重新编辑" }
@@ -95,8 +125,8 @@ class RecordsRepository(val db: DailyLifeDatabase, val files: AttachmentStore) {
         attachment
     }
     suspend fun attachExisting(draftId: String, attachmentId: String) = writes.withLock {
-        val attachment = dao.attachment(attachmentId) ?: error("附件不存在")
-        require(dao.draft(draftId) != null && attachment.ownerId == owner() && files.file(attachment).exists())
+        require(dao.draft(draftId) != null) { "草稿已关闭" }
+        requireAvailableAttachments(listOf(AttachmentLink("draft",draftId,attachmentId)))
         require(dao.linksFor("draft", draftId).size < 50) { "每条记录最多 50 份附件" }
         dao.putLinks(listOf(AttachmentLink("draft", draftId, attachmentId,
             sortOrder = dao.linksFor("draft", draftId).size)))
@@ -134,8 +164,7 @@ class RecordsRepository(val db: DailyLifeDatabase, val files: AttachmentStore) {
             require(data.folderId == null || dao.folders().any { it.id == data.folderId && it.ownerId == owner }) { "资料夹已删除，请重新选择" }
             require(data.tags.all { id -> dao.tags().any { it.id == id && it.ownerId == owner } }) { "标签已变化，请重新选择" }
             val refs = dao.linksFor("draft", id)
-            val attachments = refs.map { dao.attachment(it.attachmentId) ?: error("附件不存在") }
-            require(attachments.all { it.ownerId == owner && it.status == "available" && files.file(it).exists() }) { "附件缺失，请重选或移除后再保存" }
+            val attachments = requireAvailableAttachments(refs)
             val existing = draft.targetId?.let { dao.record(it) }
             if (draft.targetId != null) {
                 require(existing != null && existing.record.deletedAt == null) { "原记录已进入回收站，请先恢复记录" }
@@ -152,11 +181,12 @@ class RecordsRepository(val db: DailyLifeDatabase, val files: AttachmentStore) {
             if (type.kind == "file") require(attachments.isNotEmpty()) { "请添加至少一份资料或图片" }
             val date = if (type.kind == "diary") RecordRules.diaryDate(data.diaryDate) else ""
             if (type.kind == "diary") require(dao.diaryConflict(owner, date, data.recordId) == null) { "这一天已有日记，请打开原日记追加内容，或选择另一天；草稿已保留" }
+            com.example.dailylife.feature.records.JournalStyle.parse(data.presentation)
             val now = System.currentTimeMillis()
             val record = Record(data.recordId, owner, type.kind, type.id, data.title, data.folderId,
                 if (data.organized) "organized" else "inbox", existing?.record?.pinOrder,
                 existing?.record?.archivedAt, createdAt = existing?.record?.createdAt ?: now,
-                updatedAt = now, revision = (existing?.record?.revision ?: 0) + 1)
+                updatedAt = now, revision = (existing?.record?.revision ?: 0) + 1, presentation=data.presentation)
             dao.putRecord(record)
             when (type.kind) {
                 "note" -> { dao.putNote(Note(record.id, data.body, noteSubtype = type.subtype))

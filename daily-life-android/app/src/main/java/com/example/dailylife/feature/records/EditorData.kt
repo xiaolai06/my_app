@@ -12,7 +12,8 @@ data class EditorData(
     val diaryDate: String = LocalDate.now().toString(), val mood: String = "",
     val folderId: String? = null, val tags: Set<String> = emptySet(),
     val organized: Boolean = false, val fields: List<CardField> = emptyList(),
-    val allowDuplicateUrl: Boolean = false, val projectId:String? = null
+    val allowDuplicateUrl: Boolean = false, val projectId:String? = null,
+    val presentation: String = "{}"
 ) {
     fun json(): String = JSONObject().apply {
         put("recordId", recordId); put("typeId", typeId); put("baseRevision", baseRevision)
@@ -21,6 +22,7 @@ data class EditorData(
         put("tags", JSONArray(tags.toList())); put("organized", organized)
         put("allowDuplicateUrl", allowDuplicateUrl)
         put("projectId",projectId ?: JSONObject.NULL)
+        put("presentation", presentation)
         put("fields", JSONArray().apply { fields.forEach { f -> put(JSONObject().apply {
             put("id", f.id); put("name", f.name); put("value", f.value); put("valueType", f.valueType)
             put("private", f.isPrivate); put("sortOrder", f.sortOrder)
@@ -40,7 +42,8 @@ data class EditorData(
                 (0 until fields.length()).map { i -> val f = fields.getJSONObject(i)
                     CardField(f.getString("id"), id, f.optString("name"), f.optString("value"),
                         f.optString("valueType", "text"), f.optBoolean("private"), f.optInt("sortOrder", i))
-                }, o.optBoolean("allowDuplicateUrl"), if(o.isNull("projectId")) null else o.optString("projectId").ifBlank {null})
+                }, o.optBoolean("allowDuplicateUrl"), if(o.isNull("projectId")) null else o.optString("projectId").ifBlank {null},
+                o.optString("presentation", "{}"))
         }
     }
 }

@@ -19,7 +19,7 @@ data class RecordFilter(
 )
 data class EditorSession(val draftId: String, val data: EditorData, val saved: Boolean = true)
 data class RecordsUi(
-    val ready: Boolean = false, val snapshot: RecordsSnapshot = RecordsSnapshot(),
+    val ready: Boolean = false, val loadError: String? = null, val snapshot: RecordsSnapshot = RecordsSnapshot(),
     val filter: RecordFilter = RecordFilter(), val editor: EditorSession? = null,
     val detailId: String? = null, val selected: Set<String> = emptySet(),
     val busy: Boolean = false, val message: String? = null, val editorError: String? = null,
@@ -63,16 +63,29 @@ class RecordsViewModel(application: Application, private val savedState: SavedSt
     val ui = _ui.asStateFlow()
     private var autoSave: Job? = null
     private var operation: Job? = null
+    private var loading: Job? = null
     init {
-        viewModelScope.launch { preferences.appearance.collect { a -> _ui.update { it.copy(appearance = a) } } }
-        viewModelScope.launch {
+        viewModelScope.launch { preferences.appearance.retryWhen { e, attempt ->
+            if (e is CancellationException) throw e
+            message("外观偏好读取失败，正在重试")
+            delay(((attempt + 1) * 1000).coerceAtMost(30000)); true
+        }.collect { a -> _ui.update { it.copy(appearance = a) } } }
+        retryLoad()
+    }
+    fun retryLoad() {
+        if (loading?.isActive == true) return
+        _ui.update { it.copy(loadError = null) }
+        loading = viewModelScope.launch {
             try {
                 repository.initialize()
-                savedState.get<String>("draft")?.let { id ->
+                if (_ui.value.editor == null) savedState.get<String>("draft")?.let { id ->
                     repository.dao.draft(id)?.let { draft -> _ui.update { it.copy(editor = EditorSession(id, EditorData.fromJson(draft.payload))) } }
                 }
-                repository.snapshot.collect { s -> _ui.update { it.copy(ready = true, snapshot = s) } }
-            } catch (e: Exception) { if (e is CancellationException) throw e; message(e.message ?: "本地数据读取失败") }
+                repository.snapshot.collect { s -> _ui.update { it.copy(ready = true, loadError = null, snapshot = s) } }
+            } catch (e: Exception) {
+                if (e is CancellationException) throw e
+                _ui.update { it.copy(ready = false, loadError = "记录读取失败：" + (e.message ?: "请重试")) }
+            }
         }
     }
     fun message(value: String?) { _ui.update { it.copy(message = value) } }
@@ -95,7 +108,7 @@ class RecordsViewModel(application: Application, private val savedState: SavedSt
         flush()
         val d = repository.newDraft(typeId, target, template)
         var data = EditorData.fromJson(d.payload)
-        if(projectId!=null) {data=data.copy(projectId=projectId);repository.saveDraft(d.id,data)}
+        if(projectId!=null && target==null) {data=data.copy(projectId=projectId);repository.saveDraft(d.id,data)}
         if (target == null && _ui.value.snapshot.types.find { it.id == typeId }?.kind == "diary" &&
             _ui.value.filter.from != null && _ui.value.filter.from == _ui.value.filter.to) {
             data = data.copy(diaryDate = _ui.value.filter.from!!)
@@ -105,10 +118,13 @@ class RecordsViewModel(application: Application, private val savedState: SavedSt
         _ui.update { it.copy(editor = EditorSession(d.id, data), editorError = null) }
     }
     fun resume(draft: Draft) = work {
-        flush(); savedState["draft"] = draft.id
-        _ui.update { it.copy(editor = EditorSession(draft.id, EditorData.fromJson(draft.payload)), editorError = null) }
+        flush()
+        val current = repository.dao.draft(draft.id) ?: error("未完成编辑已保存或删除，请刷新列表")
+        savedState["draft"] = current.id
+        _ui.update { it.copy(editor = EditorSession(current.id, EditorData.fromJson(current.payload)), editorError = null) }
     }
     fun edit(data: EditorData) {
+        if (_ui.value.busy || operation?.isActive == true) return
         val session = _ui.value.editor ?: return
         _ui.update { it.copy(editor = session.copy(data = data, saved = false), editorError = null) }
         autoSave?.cancel()
@@ -127,10 +143,11 @@ class RecordsViewModel(application: Application, private val savedState: SavedSt
         autoSave?.cancelAndJoin()
         _ui.value.editor?.let { repository.saveDraft(it.draftId, it.data) }
     }
-    fun keepDraft() = work {
+    fun leaveEditor() = work {
         flush(); savedState["draft"] = null
-        _ui.update { it.copy(editor = null, editorError = null) }; message("草稿已保留，可从新增菜单继续")
+        _ui.update { it.copy(editor = null, editorError = null) }; message("未完成内容已保留，可在“我的”继续")
     }
+    fun keepDraft() = leaveEditor()
     fun discard(draftId: String? = null) = work {
         autoSave?.cancelAndJoin()
         val id = draftId ?: _ui.value.editor?.draftId ?: return@work
@@ -159,8 +176,8 @@ class RecordsViewModel(application: Application, private val savedState: SavedSt
     fun removeAttachment(id: String) = work {
         _ui.value.editor?.let { repository.removeAttachment(it.draftId, id) }
     }
-    fun attachExisting(id: String) = work {
-        _ui.value.editor?.let { repository.attachExisting(it.draftId, id) }
+    fun attachExisting(id: String, onSuccess: () -> Unit = {}) = work {
+        _ui.value.editor?.let { repository.attachExisting(it.draftId, id); onSuccess() }
     }
     fun exportOriginal(uri: Uri, id: String) = work {
         repository.exportOriginal(getApplication<Application>(), uri, id); message("附件原件已导出")
@@ -200,6 +217,8 @@ class RecordsViewModel(application: Application, private val savedState: SavedSt
     fun appearance(value: Appearance) = work { preferences.set(value) }
     fun exportBackup(uri: Uri) = work { backup.export(uri); message("记录备份已导出，包含附件原件；不包含草稿") }
     fun prepareRestore(uri: Uri) = work {
+        withContext(Dispatchers.IO) { backup.discardAll() }
+        _ui.update { it.copy(restorePreview = null) }
         val preview = backup.prepare(uri)
         _ui.update { it.copy(restorePreview = preview) }
     }
@@ -212,6 +231,13 @@ class RecordsViewModel(application: Application, private val savedState: SavedSt
     fun dismissRestore() = work {
         _ui.value.restorePreview?.let { withContext(Dispatchers.IO) { backup.discard(it) } }
         _ui.update { it.copy(restorePreview = null) }
+    }
+    override fun onCleared() {
+        super.onCleared()
+        (getApplication<Application>() as DailyLifeApplication).backgroundScope.launch {
+            operation?.join()
+            runCatching { backup.discardAll() }
+        }
     }
     fun acceptShared(text: String?, uris: List<Uri>) = work {
         flush()

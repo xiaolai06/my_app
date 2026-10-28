@@ -1,22 +1,152 @@
 {
-  "version": "3.2",
-  "updatedAt": "2026-10-25",
+  "version": "3.9",
+  "updatedAt": "2026-10-28",
   "status": "design-targets-not-native-measurements",
-  "press": { "scale": 0.975, "downMs": 80, "releaseMs": 220, "releaseBezier": [0.2,0.8,0.2,1] },
-  "navigation": { "highlightMs": 180, "contentMs": 160, "contentOffsetDp": 0, "crossColumnTranslation": false },
-  "detail": { "suggestedMs": 220, "predictiveBack": "system-and-navigation-driven" },
-  "sheet": { "enterMs": 360, "exitMs": 180, "enterOffsetDp": 36, "exitOffsetDp": 25, "enterBezier": [0.2, 0.8, 0.2, 1], "exitBezier": [0.4,0,1,1] },
-  "menu": { "enterMs": 180, "enterScale": 0.98, "enterOffsetDp": -4, "origin": "anchored-trigger", "exit": "immediate-in-preview" },
-  "picker": { "enterMs": 300, "enterOffsetDp": 20, "enterScale": 0.985, "cancelDoesNotCommit": true, "selectionMs": 220, "exit": "immediate-in-preview" },
-  "switch": { "thumbMs": 280, "thumbBezier": [0.2,0.8,0.2,1], "trackMs": 220 },
-  "check": { "stateMs": 160, "listPlacementMs": 240 },
-  "filter": { "selectionMs": 220, "resultsMs": 240, "searchResults": "immediate-local-update", "preserveInputFocus": true },
-  "progress": { "updateMs": 240, "animateInitialLoadFromZero": false },
-  "theme": { "maximumColorTransitionMs": 220, "replayPageEnter": false },
-  "reducedMotion": { "source": "system-or-user", "scale": false, "translation": false, "continuousEffects": false, "retainStatusFeedback": true },
+  "press": {
+    "scale": 0.98,
+    "downMs": 100,
+    "releaseMs": 160,
+    "releaseBezier": [
+      0.2,
+      0.8,
+      0.2,
+      1
+    ]
+  },
+  "navigation": {
+    "highlightMs": 220,
+    "contentMs": 220,
+    "contentOffsetDp": 6,
+    "crossColumnTranslation": true,
+    "easing": "FastOutSlowIn",
+    "infiniteMotion": false
+  },
+  "floatingAction": {
+    "sizeDp": 56,
+    "radiusDp": 28,
+    "iconDp": 24,
+    "pressedScale": 0.96,
+    "layout": "reserved-transparent-bottom-row-end-aligned",
+    "tooltip": "long-press-action-name",
+    "disabledWhileSaving": true,
+    "shape": "circle"
+  },
+  "pageTransition": {
+    "contentMs": 220,
+    "outgoingContentInteractive": false,
+    "outgoingContentAccessible": false,
+    "rootHeaderMovesWithPage": true,
+    "retainSaveablePageState": true,
+    "contentOffsetDp": 6
+  },
+  "detail": {
+    "suggestedMs": 220,
+    "predictiveBack": "system-and-navigation-driven"
+  },
+  "sheet": {
+    "enterMs": 360,
+    "exitMs": 180,
+    "enterOffsetDp": 36,
+    "exitOffsetDp": 25,
+    "enterBezier": [
+      0.2,
+      0.8,
+      0.2,
+      1
+    ],
+    "exitBezier": [
+      0.4,
+      0,
+      1,
+      1
+    ]
+  },
+  "menu": {
+    "enterMs": 180,
+    "enterScale": 0.98,
+    "enterOffsetDp": -4,
+    "origin": "anchored-trigger",
+    "exit": "immediate-in-preview"
+  },
+  "picker": {
+    "enterMs": 300,
+    "enterOffsetDp": 20,
+    "enterScale": 0.985,
+    "cancelDoesNotCommit": true,
+    "selectionMs": 220,
+    "exit": "immediate-in-preview"
+  },
+  "switch": {
+    "thumbMs": 280,
+    "thumbBezier": [
+      0.2,
+      0.8,
+      0.2,
+      1
+    ],
+    "trackMs": 220
+  },
+  "check": {
+    "stateMs": 160,
+    "listPlacementMs": 240
+  },
+  "filter": {
+    "selectionMs": 180,
+    "resultsMs": 240,
+    "searchResults": "immediate-local-update",
+    "preserveInputFocus": true
+  },
+  "progress": {
+    "updateMs": 240,
+    "animateInitialLoadFromZero": false
+  },
+  "theme": {
+    "maximumColorTransitionMs": 220,
+    "replayPageEnter": false
+  },
+  "reducedMotion": {
+    "source": "system-or-user",
+    "scale": false,
+    "translation": false,
+    "continuousEffects": false,
+    "retainStatusFeedback": true
+  },
   "decorativeLoops": false,
   "saveSuccessSource": "actual-commit-result",
-  "haptics": { "optionalOn": ["task-complete", "habit-check"], "respectSystemSettings": true },
-  "previewImplemented": ["press", "local-nav-glass-highlight", "page-enter", "sheet-enter-exit", "menu-enter", "picker-enter", "switch-thumb", "progress-update", "reduced-motion", "focus-restoration"],
-  "nativePending": ["all-Glass-components", "custom-pickers", "list-placement", "predictive-back", "ime-sync", "haptics"]
+  "haptics": {
+    "optionalOn": [
+      "task-complete",
+      "habit-check"
+    ],
+    "respectSystemSettings": true
+  },
+  "previewImplemented": [
+    "press",
+    "local-nav-glass-highlight",
+    "page-enter",
+    "sheet-enter-exit",
+    "menu-enter",
+    "picker-enter",
+    "switch-thumb",
+    "progress-update",
+    "reduced-motion",
+    "focus-restoration"
+  ],
+  "nativePending": [
+    "list-placement-device-performance",
+    "predictive-back-device-validation",
+    "ime-device-validation",
+    "haptics"
+  ],
+  "toolCollections": {
+    "placementMs": 220,
+    "reducedMotionMs": 0,
+    "photoPageChange": "horizontal-pager",
+    "thumbnailChangeRespectsReducedMotion": true
+  },
+  "formSection": {
+    "expandCollapseMs": 180,
+    "reducedMotionMs": 0,
+    "preserveCollapsedValues": true
+  }
 }

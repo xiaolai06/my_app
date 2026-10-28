@@ -11,6 +11,7 @@ import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import com.example.dailylife.core.ToolRules
 import com.example.dailylife.feature.tools.*
@@ -37,12 +38,12 @@ import kotlinx.coroutines.launch
     LazyColumn(Modifier.fillMaxSize(),state=listState,contentPadding=PaddingValues(20.dp,12.dp,20.dp,24.dp),verticalArrangement=Arrangement.spacedBy(16.dp)) {
         item {GlassPanel(Modifier.fillMaxWidth()) {Column(Modifier.padding(18.dp),verticalArrangement=Arrangement.spacedBy(14.dp)) {
             when(kind) {
-                "calculator"->{ToolField("算式，如 (120 + 30) × 80%",first,{first=it});Text("支持四则、括号和百分数；50% 表示 50÷100。",color=LocalGlass.current.muted)}
-                "aa"->{ToolField("总金额（元）",first,{first=it});ToolField("人数（1～1000）",second,{second=it});Text("按整数分等分，余下的分依次分给前几人，总和保持一致。",color=LocalGlass.current.muted)}
-                else->{FlowChoices(listOf("between" to "日期间隔","offset" to "日期加减"),mode) {mode=it;second=if(it=="offset") "0" else first;result=""};ToolDate("开始日期",first,{dateKey="first"});if(mode=="between") {ToolDate("结束日期",second,{dateKey="second"});ToolSwitch("包含开始日",include) {include=it}} else ToolField("增加 / 减少自然日，如 -7",second,{second=it});Text("按公历自然日计算，不包含法定工作日算法。",color=LocalGlass.current.muted)}
+                "calculator"->{ToolField("算式，如 (120 + 30) × 80%",first,{first=it;result="";error=null});Text("支持四则、括号和百分数；50% 表示 50÷100。",color=LocalGlass.current.muted)}
+                "aa"->{ToolField("总金额（元）",first,{first=it;result="";error=null},keyboardType=KeyboardType.Decimal);ToolField("人数（1～1000）",second,{second=it;result="";error=null},keyboardType=KeyboardType.Number);Text("按整数分等分，余下的分依次分给前几人，总和保持一致。",color=LocalGlass.current.muted)}
+                else->{FlowChoices(listOf("between" to "日期间隔","offset" to "日期加减"),mode) {mode=it;second=if(it=="offset") "0" else first;result=""};ToolDate("开始日期",first,{dateKey="first"});if(mode=="between") {ToolDate("结束日期",second,{dateKey="second"});ToolSwitch("包含开始日",include) {include=it;result="";error=null}} else ToolField("增加 / 减少自然日，如 -7",second,{second=it;result="";error=null});Text("按公历自然日计算，不包含法定工作日算法。",color=LocalGlass.current.muted)}
             }
             error?.let {Text(it,color=MaterialTheme.colorScheme.error)}
-            Button(enabled=!ui.busy,onClick={calculate()},modifier=Modifier.fillMaxWidth()) {Text("计算结果")}
+            GlassButton(enabled=!ui.busy,onClick={calculate()},modifier=Modifier.fillMaxWidth()) {Text("计算结果")}
         }}}
         if(result.isNotEmpty()) item {GlassPanel(Modifier.fillMaxWidth(),selected=true) {Column(Modifier.padding(18.dp),verticalArrangement=Arrangement.spacedBy(12.dp)) {
             Text("结果",style=MaterialTheme.typography.labelLarge);Text(result,style=MaterialTheme.typography.titleLarge,modifier=Modifier.testTag("calculationResult"))
@@ -66,6 +67,6 @@ import kotlinx.coroutines.launch
             GlassPanel(Modifier.fillMaxWidth()) {Column(Modifier.padding(14.dp)) {Text(summary,color=LocalGlass.current.muted);Text(JSONObject(h.result).optString("value"));Row {TextButton(onClick={clipboard.setText(AnnotatedString(JSONObject(h.result).optString("value")))}) {Text("复制")};TextButton(onClick={vm.run("历史已删除") {clearCalculation(h.id)}}) {Text("删除")}}}}
         }
     }
-    dateKey?.let {key->CalendarDialog(if(key=="first") first else second,{dateKey=null}) {if(key=="first") first=it else second=it;dateKey=null}}
+    dateKey?.let {key->CalendarDialog(if(key=="first") first else second,{dateKey=null}) {if(key=="first") first=it else second=it;result="";error=null;dateKey=null}}
     if(clear) ConfirmDialog("清空计算历史","会清空所有计算工具的历史，业务内容保留。",{clear=false},{vm.run("历史已清空") {clearCalculation()}})
 }

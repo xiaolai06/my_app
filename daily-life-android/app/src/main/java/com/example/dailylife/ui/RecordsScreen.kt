@@ -18,6 +18,7 @@ import com.example.dailylife.data.local.*
 import com.example.dailylife.feature.records.*
 import java.time.*
 import java.time.format.DateTimeFormatter
+import kotlinx.coroutines.*
 
 @Composable fun RecordsScreen(ui: RecordsUi, vm: RecordsViewModel, openAttachment: (Attachment) -> Unit) {
     var add by rememberSaveable { mutableStateOf(false) }
@@ -26,7 +27,13 @@ import java.time.format.DateTimeFormatter
     var bulk by rememberSaveable { mutableStateOf(false) }
     var destroy by remember { mutableStateOf(false) }
     var diaryCalendar by remember { mutableStateOf(false) }
-    val records = remember(ui.snapshot, ui.filter) { ui.snapshot.filtered(ui.filter) }
+    val queryKey=remember(ui.snapshot,ui.filter) {Any()}
+    val filtered by produceState<Pair<Any,List<RecordBundle>>?>(null,queryKey) {
+        if(ui.filter.query.isNotBlank()) delay(180)
+        value=queryKey to withContext(Dispatchers.Default) {ui.snapshot.filtered(ui.filter)}
+    }
+    val filtering=filtered?.first!==queryKey
+    val records=filtered?.takeIf {it.first===queryKey}?.second.orEmpty()
     val p = LocalGlass.current
     val largeFont = LocalDensity.current.fontScale > 1.3f
     val showAdd = ui.selected.isEmpty() && ui.filter.state != "trash"
@@ -34,10 +41,10 @@ import java.time.format.DateTimeFormatter
         Column(Modifier.fillMaxSize()) {
         Column(Modifier.weight(1f).testTag("recordsContent")) {
             Row(Modifier.padding(horizontal = 18.dp), verticalAlignment = Alignment.CenterVertically) {
-                OutlinedTextField(ui.filter.query, { vm.filter(ui.filter.copy(query = it)) }, placeholder = { Text(if(largeFont) "搜索记录" else "搜索正文、标签或附件名",maxLines=1,overflow=TextOverflow.Ellipsis) },
+                GlassTextField(ui.filter.query, { vm.filter(ui.filter.copy(query = it)) }, placeholder = { Text(if(largeFont) "搜索记录" else "搜索正文、标签或附件名",maxLines=1,overflow=TextOverflow.Ellipsis) },
                     singleLine = true, shape = androidx.compose.foundation.shape.RoundedCornerShape(19.dp),
                     leadingIcon = { Icon(Icons.Default.Search, null) }, modifier = Modifier.weight(1f).testTag("recordSearch"))
-                IconButton(onClick = { filters = true }) { Icon(Icons.Default.MoreVert, "筛选与排序") }
+                GlassIconButton(onClick = { filters = true }) { Icon(Icons.Default.MoreVert, "筛选与排序") }
             }
             LazyRow(Modifier.fillMaxWidth().padding(top = 12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp), contentPadding = PaddingValues(horizontal = 18.dp)) {
                 item { GlassChoice("全部", ui.filter.typeId == null, onClick = { vm.filter(ui.filter.copy(typeId = null)) }) }
@@ -47,32 +54,22 @@ import java.time.format.DateTimeFormatter
             }
             Row(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
                 Text((when (ui.filter.state) { "trash" -> "回收站"; "archived" -> "归档"; else -> if (ui.filter.inbox) "待整理" else "我的记录" }) +
-                    " · " + records.size, Modifier.weight(1f), style = MaterialTheme.typography.bodySmall, color = p.muted)
+                    " · " + if(filtering) "筛选中…" else records.size.toString(), Modifier.weight(1f), style = MaterialTheme.typography.bodySmall, color = p.muted)
                 TextButton(onClick = { organize = true }) { Text("管理分类") }
                 if (ui.snapshot.types.find { it.id == ui.filter.typeId }?.kind == "diary")
                     TextButton(onClick = { diaryCalendar = true }) { Text("日历") }
             }
-            if (records.isEmpty()) Column(Modifier.fillMaxWidth().weight(1f).verticalScroll(rememberScrollState()).padding(32.dp), verticalArrangement = Arrangement.Center) {
-                Text(if (ui.snapshot.records.isEmpty()) "从一条随记开始" else "这里还没有记录", style = MaterialTheme.typography.headlineSmall)
-                Text(if (ui.snapshot.records.isEmpty()) "写下想法，放入照片，也可以收藏一个链接。\n点击"+(if(largeFont) "下方" else "右下方")+"「写记录」。" else "试试调整筛选，或搜索其他关键词。",
-                    Modifier.padding(top = 12.dp), color = p.muted)
+            if(filtering) Box(Modifier.fillMaxWidth().weight(1f),contentAlignment=Alignment.Center) {CircularProgressIndicator()}
+            else if (records.isEmpty()) Column(Modifier.fillMaxWidth().weight(1f).verticalScroll(rememberScrollState()).padding(32.dp), verticalArrangement = Arrangement.Center) {
+                GlassEmptyState(if (ui.snapshot.records.isEmpty()) "从一条随记开始" else "没有符合条件的记录",
+                    if(ui.snapshot.records.isEmpty()) "点右下角「＋」，保存想法、照片或链接。" else "调整筛选或试试其他关键词。")
                 if (ui.filter != RecordFilter()) TextButton(onClick = { vm.filter(RecordFilter()) }) { Text("清除筛选") }
-            } else LazyColumn(modifier = Modifier.weight(1f).fillMaxWidth().testTag("recordsList"), contentPadding = PaddingValues(start = 18.dp, end = 18.dp, bottom = 106.dp),
+            } else LazyColumn(modifier = Modifier.weight(1f).fillMaxWidth().testTag("recordsList"), contentPadding = PaddingValues(start = 18.dp, end = 18.dp, bottom = if(ui.selected.isNotEmpty()) 106.dp else 24.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 items(records, key = { it.record.id }) { b -> RecordListItem(b, ui, vm, b.record.id in ui.selected) }
             }
         }
-        if(largeFont && showAdd) FilledTonalButton(onClick={add=true},enabled=!ui.busy,
-            modifier=Modifier.fillMaxWidth().padding(horizontal=18.dp,vertical=8.dp).heightIn(min=56.dp).testTag("addRecord"),
-            colors=ButtonDefaults.filledTonalButtonColors(containerColor=p.selected,contentColor=p.accent)) {Text("＋ 写记录")}
-        }
-        if (!largeFont && showAdd) FloatingActionButton(onClick = { add = true },
-            modifier = Modifier.align(Alignment.BottomEnd).padding(20.dp).testTag("addRecord"),
-            shape = androidx.compose.foundation.shape.RoundedCornerShape(26.dp),
-            containerColor = p.selected, contentColor = p.accent) {
-            Row(Modifier.padding(horizontal = 20.dp), verticalAlignment = Alignment.CenterVertically) {
-                Icon(Icons.Default.Add, null); Spacer(Modifier.width(6.dp)); Text("写记录", fontWeight = FontWeight.SemiBold)
-            }
+        if(showAdd) GlassFloatingActionRow("写记录","addRecord",enabled=!ui.busy) {add=true}
         }
         if (ui.selected.isNotEmpty()) GlassPanel(Modifier.align(Alignment.BottomCenter).fillMaxWidth().padding(12.dp), radius = 24) {
             Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), verticalAlignment = Alignment.CenterVertically) {
@@ -89,8 +86,7 @@ import java.time.format.DateTimeFormatter
         }
     }
     if (add) GlassSheet("新建记录", { add = false }) {
-        Text("选择内容结构，保存到本机", color = p.muted)
-        ui.snapshot.types.chunked(2).forEach { row ->
+        ui.snapshot.types.chunked(if(largeFont) 1 else 2).forEach { row ->
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 row.forEach { t -> GlassPanel(Modifier.weight(1f), radius = 20) {
                     Column(Modifier.fillMaxWidth().testTag("newRecordType:" + t.id).clickable(enabled = !ui.busy) { add = false; vm.begin(t.id) }.padding(18.dp)) {
@@ -98,7 +94,7 @@ import java.time.format.DateTimeFormatter
                         Text(typeDescription(t.kind, t.subtype), style = MaterialTheme.typography.bodySmall, color = p.muted)
                     }
                 } }
-                if (row.size == 1) Spacer(Modifier.weight(1f))
+                if (!largeFont && row.size == 1) Spacer(Modifier.weight(1f))
             }
         }
         if (ui.snapshot.templates.isNotEmpty()) {
@@ -168,32 +164,28 @@ fun typeDescription(kind: String, subtype: String): String = when {
 @Composable fun FilterSheet(ui: RecordsUi, dismiss: () -> Unit, apply: (RecordFilter) -> Unit) {
     var filter by remember { mutableStateOf(ui.filter) }
     var calendar by remember { mutableStateOf<String?>(null) }
-    GlassSheet("筛选与排序", dismiss) {
+    val rangeValid=filter.from==null || filter.to==null || filter.from!!<=filter.to!!
+    GlassSheet("筛选与排序", dismiss,footer={
+        PickerActions(dismiss,{apply(filter)},"应用筛选",rangeValid,leading={TextButton(onClick={filter=RecordFilter()}) {Text("重置")}})
+    }) {
         SectionLabel("显示范围")
         FlowChoices(listOf("active" to "日常", "archived" to "已归档", "trash" to "回收站"), filter.state) { filter = filter.copy(state = it) }
         SettingRow("仅待整理", "添加标签不会自动改变整理状态", filter.inbox) { filter = filter.copy(inbox = it) }
-        SectionLabel("资料夹")
-        FlowChoices(listOf("all" to "全部", "none" to "未分类") + ui.snapshot.folders.map { it.id to it.name }, filter.folderId ?: "all") {
-            filter = filter.copy(folderId = it.takeUnless { it == "all" })
+        GlassSelectField("资料夹",listOf("all" to "全部", "none" to "未分类") + ui.snapshot.folders.map { it.id to it.name },filter.folderId ?: "all") {
+            filter=filter.copy(folderId=it.takeUnless {it=="all"})
         }
-        SectionLabel("标签", "同时满足选中的标签")
-        MultiChoices(ui.snapshot.tags.map { it.id to it.name }, filter.tags) { filter = filter.copy(tags = it) }
+        GlassMultiSelectField("标签 · 同时满足",ui.snapshot.tags.map {it.id to it.name},filter.tags) {filter=filter.copy(tags=it)}
         SectionLabel("日期范围", "日记按日记日期；其他记录按创建日期")
-        Row {
-            TextButton(onClick = { calendar = "from" }) { Text(filter.from ?: "开始日期") }
-            TextButton(onClick = { calendar = "to" }) { Text(filter.to ?: "结束日期") }
-            TextButton(onClick = { filter = filter.copy(from = null, to = null) }) { Text("清除") }
-        }
+        DateRow("开始日期",filter.from.orEmpty(),{calendar="from"},{filter=filter.copy(from=null)})
+        DateRow("结束日期",filter.to.orEmpty(),{calendar="to"},{filter=filter.copy(to=null)})
+        if(!rangeValid) Text("结束日期不能早于开始日期",color=MaterialTheme.colorScheme.error)
         SettingRow("往年同一天", "仅显示与今天月日相同的日记", filter.anniversary) { filter = filter.copy(anniversary = it) }
+        SectionLabel("排序")
         FlowChoices(listOf("updated" to "最近修改", "created" to "最近创建", "title" to "按标题"), filter.sort) { filter = filter.copy(sort = it) }
-        Row {
-            TextButton(onClick = { filter = RecordFilter() }) { Text("重置") }
-            Button(enabled = filter.from == null || filter.to == null || filter.from!! <= filter.to!!, onClick = { apply(filter) }) { Text("应用筛选") }
-        }
     }
-    calendar?.let { part -> CalendarDialog(if (part == "from") filter.from.orEmpty() else filter.to.orEmpty(), { calendar = null }) {
-        filter = if (part == "from") filter.copy(from = it) else filter.copy(to = it)
-    } }
+    calendar?.let {part->CalendarDialog(if(part=="from") filter.from.orEmpty() else filter.to.orEmpty(),{calendar=null}) {
+        filter=if(part=="from") filter.copy(from=it) else filter.copy(to=it)
+    }}
 }
 
 @Composable fun ClassificationSheet(ui: RecordsUi, data: EditorData?, dismiss: () -> Unit,
@@ -201,13 +193,11 @@ fun typeDescription(kind: String, subtype: String): String = when {
     var folder by remember { mutableStateOf(data?.folderId) }
     var tags by remember { mutableStateOf(data?.tags ?: emptySet()) }
     var organized by remember { mutableStateOf(data?.organized ?: false) }
-    GlassSheet(if (data == null) "批量归类" else "整理这条记录", dismiss) {
-        SectionLabel("资料夹")
-        FlowChoices(listOf("none" to "未分类") + ui.snapshot.folders.map { it.id to it.name }, folder ?: "none") { folder = it.takeUnless { it == "none" } }
-        SectionLabel("标签", if (data == null) "批量操作会追加标签，保留原有标签" else "可多选，点击选中项可取消")
-        MultiChoices(ui.snapshot.tags.map { it.id to it.name }, tags) { tags = it }
-        if (ui.snapshot.tags.isEmpty()) Text("还没有标签，可返回列表的「管理分类」创建。", style = MaterialTheme.typography.bodySmall)
-        if (data != null) SettingRow("已整理", "单独控制整理状态", organized) { organized = it }
-        Button(onClick = { apply(folder, tags, organized) }) { Text("确认归类") }
+    GlassSheet(if(data==null) "批量归类" else "整理这条记录",dismiss,footer={PickerActions(dismiss,{apply(folder,tags,organized)},"确认归类")}) {
+        GlassSelectField("资料夹",listOf("none" to "未分类")+ui.snapshot.folders.map {it.id to it.name},folder ?: "none") {folder=it.takeUnless {it=="none"}}
+        GlassMultiSelectField("标签",ui.snapshot.tags.map {it.id to it.name},tags) {tags=it}
+        Text(if(data==null) "批量操作会追加标签，保留原有标签" else "标签可以多选，关闭选择面板不会修改原内容",style=MaterialTheme.typography.bodySmall,color=LocalGlass.current.muted)
+        if(ui.snapshot.tags.isEmpty()) Text("还没有标签，可返回列表的「管理分类」创建。",style=MaterialTheme.typography.bodySmall)
+        if(data!=null) SettingRow("已整理", "单独控制整理状态", organized) {organized=it}
     }
 }

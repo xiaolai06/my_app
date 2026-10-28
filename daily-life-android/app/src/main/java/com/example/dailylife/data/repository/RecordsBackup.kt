@@ -1,5 +1,6 @@
 package com.example.dailylife.data.repository
 
+import com.example.dailylife.data.files.RestoreWorkspaceOwner
 import android.content.Context
 import android.net.Uri
 import androidx.room.withTransaction
@@ -29,6 +30,8 @@ private fun sha(file: File): String {
 
 /** Versioned records-only portable archive. It never replaces a database or restores executable content. */
 class RecordsBackup(private val context: Context, private val repo: RecordsRepository) {
+    private val workspaces = RestoreWorkspaceOwner(context.cacheDir)
+    fun discardAll() = workspaces.close()
     suspend fun export(uri: Uri) = repo.writes.withLock { withContext(Dispatchers.IO) {
         val manifest = repo.db.withTransaction {
             val dao = repo.dao
@@ -38,7 +41,7 @@ class RecordsBackup(private val context: Context, private val repo: RecordsRepos
             val attachments = dao.attachments().filter { a -> links.any { it.attachmentId == a.id } }
             require(attachments.size <= 1000 && attachments.sumOf { it.size } <= 256L * 1024 * 1024) { "本次轻量备份最多 1000 份附件、共 256 MB" }
             JSONObject().apply {
-                put("format", "daily-life-records"); put("version", 1); put("createdAt", System.currentTimeMillis())
+                put("format", "daily-life-records"); put("version", 2); put("createdAt", System.currentTimeMillis())
                 put("types", JSONArray(dao.types().map { JSONObject().apply {
                     put("id", it.id); put("name", it.name); put("kind", it.kind); put("subtype", it.subtype); put("icon", it.icon); put("sortOrder", it.sortOrder)
                 } }))
@@ -49,7 +52,7 @@ class RecordsBackup(private val context: Context, private val repo: RecordsRepos
                         put("data", JSONObject(EditorData(r.id, r.typeId, r.revision, r.title, b.body,
                             b.bookmark?.url ?: "", b.diary?.diaryDate ?: java.time.LocalDate.now().toString(), b.diary?.mood ?: "",
                             r.folderId, b.tagLinks.filter { it.entityType == "record" }.map { it.tagId }.toSet(),
-                            r.organizationStatus == "organized", b.fields).json()))
+                            r.organizationStatus == "organized", b.fields, presentation=r.presentation).json()))
                         put("kind", r.kind); put("createdAt", r.createdAt); put("updatedAt", r.updatedAt)
                         put("pinOrder", r.pinOrder ?: JSONObject.NULL); put("archivedAt", r.archivedAt ?: JSONObject.NULL)
                         put("deletedAt", r.deletedAt ?: JSONObject.NULL); put("readAt", b.bookmark?.readAt ?: JSONObject.NULL)
@@ -81,7 +84,7 @@ class RecordsBackup(private val context: Context, private val repo: RecordsRepos
     } }
 
     suspend fun prepare(uri: Uri): RestorePreview = withContext(Dispatchers.IO) {
-        val directory = File(context.cacheDir, "restore-" + newId()).apply { check(mkdirs()) }
+        val directory = workspaces.create( "restore-")
         try {
             var total = 0L; val seen = mutableSetOf<String>()
             val input = context.contentResolver.openInputStream(uri) ?: error("无法读取备份")
@@ -117,10 +120,10 @@ class RecordsBackup(private val context: Context, private val repo: RecordsRepos
             val rows = manifest.getJSONArray("records").objects()
             RestorePreview(manifest, directory, rows.size, manifest.getJSONArray("attachments").length(),
                 rows.count { it.getJSONObject("data").getString("recordId") in ids })
-        } catch (e: Exception) { directory.deleteRecursively(); throw e }
+        } catch (e: Exception) { workspaces.discard(directory); throw e }
     }
     private fun validate(m: JSONObject, directory: File, names: Set<String>) {
-        require(m.getString("format") == "daily-life-records" && m.getInt("version") == 1) { "不支持此备份格式或版本" }
+        require(m.getString("format") == "daily-life-records" && m.getInt("version") in 1..2) { "不支持此备份格式或版本" }
         val typeRows = m.getJSONArray("types").objects(); require(typeRows.size in 1..200)
         val types = typeRows.associateBy { uuid(it.getString("id")) }; require(types.size == typeRows.size)
         typeRows.forEach { t ->
@@ -157,6 +160,7 @@ class RecordsBackup(private val context: Context, private val repo: RecordsRepos
             if (kind == "bookmark") RecordRules.url(data.url)
             else if (type.getString("subtype") != "card") RecordRules.content(data.title, data.body, count)
             if (kind == "file") require(count > 0)
+            com.example.dailylife.feature.records.JournalStyle.parse(data.presentation)
             if (kind == "diary") RecordRules.diaryDate(data.diaryDate)
             if (type.getString("subtype") == "card") {
                 require(data.title.isNotBlank() && data.fields.size in 1..50)
@@ -183,7 +187,7 @@ class RecordsBackup(private val context: Context, private val repo: RecordsRepos
             require(data.fields.size <= 50 && data.fields.all { f -> f.value.isEmpty() })
         }
     }
-    fun discard(preview: RestorePreview) { preview.directory.deleteRecursively() }
+    fun discard(preview: RestorePreview) { workspaces.discard(preview.directory) }
     suspend fun restore(preview: RestorePreview): Pair<Int, Int> = repo.writes.withLock { withContext(Dispatchers.IO) {
         val published = mutableListOf<File>()
         try {
@@ -243,7 +247,7 @@ class RecordsBackup(private val context: Context, private val repo: RecordsRepos
                     val r = Record(data.recordId, owner, row.getString("kind"), typeMap.getValue(data.typeId), data.title,
                         data.folderId?.let { folderMap.getValue(it) }, if (data.organized) "organized" else "inbox",
                         row.nullLong("pinOrder"), row.nullLong("archivedAt"), deleted, row.getLong("createdAt"),
-                        row.getLong("updatedAt"), data.baseRevision)
+                        row.getLong("updatedAt"), data.baseRevision, data.presentation)
                     dao.putRecord(r)
                     when (r.kind) {
                         "note" -> { dao.putNote(Note(r.id, data.body, noteSubtype = dao.type(r.typeId)!!.subtype)); dao.putFields(data.fields) }
@@ -262,8 +266,8 @@ class RecordsBackup(private val context: Context, private val repo: RecordsRepos
             }
             discard(preview); inserted to skipped
         } catch (e: Exception) {
-            // Database transaction rolled back; remove only files this operation just created.
-            published.forEach { it.delete() }; throw e
+            // Recheck committed metadata, including cancellation after transaction completion.
+            repo.cleanupUncommittedOriginals(published); throw e
         }
     } }
 }

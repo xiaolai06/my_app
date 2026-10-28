@@ -3,271 +3,349 @@ package com.example.dailylife.ui
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.*
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.*
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.*
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.example.dailylife.core.PlanRules
 import com.example.dailylife.data.local.*
 import com.example.dailylife.data.repository.RecordsSnapshot
 import com.example.dailylife.feature.plans.*
 import java.time.*
-import java.time.temporal.ChronoUnit
 
 @Composable fun PlanDetail(ui:PlansUi,vm:PlansViewModel,records:RecordsSnapshot,view:(Attachment)->Unit,openRecord:(String)->Unit) {
-    val id=ui.detailId ?: return;val kind=ui.detailKind ?: return;val s=ui.data
-    val t=s.tasks.find {it.id==id};val e=s.events.find {it.id==id};val h=s.habits.find {it.id==id}
-    val focus=s.sessions.find {it.id==id};val g=s.goals.find {it.id==id}
-    val occurrence=s.occurrences.find {it.id==ui.instanceId}
-    val title=when(kind) {"task"->t?.title;"event"->e?.title;"habit"->h?.name;"focus"->focus?.title;else->g?.name}
-    val note=when(kind) {"task"->t?.note;"event"->e?.note;"habit"->h?.note;"focus"->focus?.note;else->g?.note}.orEmpty()
-    val deleted=when(kind) {"task"->t?.deletedAt;"event"->e?.deletedAt;"habit"->h?.deletedAt;"focus"->focus?.deletedAt;else->g?.deletedAt}!=null
-    var action by remember(id) {mutableStateOf<String?>(null)}
+    val id=ui.detailId ?: return
+    val kind=ui.detailKind ?: return
+    val s=ui.data
+    val task=s.tasks.find {it.id==id};val event=s.events.find {it.id==id};val habit=s.habits.find {it.id==id}
+    val focus=s.sessions.find {it.id==id};val goal=s.goals.find {it.id==id}
+    val occurrence=s.occurrences.find {it.id==ui.instanceId && it.entityType==kind && it.entityId==id}
+    val title=occurrence?.title ?: when(kind) {"task"->task?.title;"event"->event?.title;"habit"->habit?.name;"focus"->focus?.title;else->goal?.name}
+    val note=when(kind) {"task"->task?.note;"event"->event?.note;"habit"->habit?.note;"focus"->focus?.note;else->goal?.note}.orEmpty()
+    val deleted=when(kind) {"task"->task?.deletedAt;"event"->event?.deletedAt;"habit"->habit?.deletedAt;"focus"->focus?.deletedAt;else->goal?.deletedAt}!=null
+    val archived=when(kind) {"task"->task?.archivedAt;"event"->event?.archivedAt;"habit"->habit?.archivedAt;else->goal?.archivedAt}!=null
+    val editable=title!=null && !deleted && !archived
+    val writable=editable && !ui.busy
+    val repeating=s.rules.any {it.entityType==kind && it.entityId==id}
+    var menu by remember(id,ui.instanceId) {mutableStateOf(false)}
+    var action by remember(id,ui.instanceId) {mutableStateOf<String?>(null)}
+    var entryMenu by remember(id) {mutableStateOf<String?>(null)}
     var logEdit by remember(id) {mutableStateOf<String?>(null)}
     var logAdd by remember(id) {mutableStateOf(false)}
     var logDelete by remember(id) {mutableStateOf<String?>(null)}
-    var moveDate by remember(id) {mutableStateOf(false)}
-    var instanceTitle by remember(occurrence?.id) {mutableStateOf(occurrence?.title ?: title.orEmpty())}
+    var moveDate by remember(id,ui.instanceId) {mutableStateOf(false)}
+    var rename by remember(id,ui.instanceId) {mutableStateOf(false)}
     var selectSources by remember(id) {mutableStateOf(false)}
-    var milestone by remember(id) {mutableStateOf<Milestone?>(null)}
+    var milestoneEdit by remember(id) {mutableStateOf<Milestone?>(null)}
     var newMilestone by remember(id) {mutableStateOf(false)}
     var correction by remember(id) {mutableStateOf(false)}
     var focusNote by remember(id) {mutableStateOf(false)}
+    var reminder by remember(id,ui.instanceId) {mutableStateOf(false)}
     var habitCalendar by remember(id) {mutableStateOf(false)}
     var habitDate by remember(id) {mutableStateOf<String?>(null)}
-    BackHandler {vm.detail(null)}
+    val today=LocalDate.now().toString()
+    BackHandler(enabled=!ui.busy) {vm.detail(null)}
     Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()) {
-        Row(Modifier.fillMaxWidth().padding(horizontal=12.dp),verticalAlignment=Alignment.CenterVertically) {
-            TextButton(onClick={vm.detail(null)},modifier=Modifier.testTag("backPlanDetail")) {Text("返回")}
-            Text(planNames.first {it.first==kind}.second+"详情",Modifier.weight(1f),style=MaterialTheme.typography.titleLarge)
-            if(!deleted && kind!="focus") TextButton(enabled=!ui.busy,onClick={vm.begin(kind,id=id)}) {Text(if(occurrence==null) "编辑" else "编辑系列")}
+        GlassPageHeader(planNames.first {it.first==kind}.second,back={vm.detail(null)},enabled=!ui.busy,backTag="backPlanDetail") {
+            IconButton(enabled=!ui.busy && title!=null,onClick={vm.clearError();menu=true},modifier=Modifier.testTag("planDetailMenu").semantics {contentDescription="更多操作"}) {PlanGlyph("more",color=LocalGlass.current.muted)}
         }
-        Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(20.dp),verticalArrangement=Arrangement.spacedBy(16.dp)) {
-            if(title==null) {Text("此内容已不存在");return@Column}
-            Text(occurrence?.title ?: title,style=MaterialTheme.typography.headlineMedium)
-            if(deleted) Text("已在回收站，恢复后可继续操作",color=MaterialTheme.colorScheme.error)
-            if(note.isNotBlank()) GlassPanel(Modifier.fillMaxWidth()) {Column(Modifier.padding(18.dp)) {MarkdownBody(note)}}
-            if(kind=="task" && t!=null) {
-                TaskCard(TaskRow(t,occurrence),ui,vm)
-                if(!deleted) {
-                    FlowChoices(listOf("doing" to "开始处理","todo" to "回到待办","cancelled" to "取消任务"),null) {vm.task(TaskRow(t,occurrence),it)}
-                    TextButton(onClick={if(occurrence!=null) moveDate=true else vm.begin("task",id=id)}) {Text(if(occurrence!=null) "只调整本次日期" else "调整计划日期")}
-                    t.sourceRecordId?.let {source->TextButton(onClick={openRecord(source)}) {Text("查看来源记录")}}
+        LazyColumn(Modifier.fillMaxSize().testTag("planDetailList"),contentPadding=PaddingValues(18.dp,10.dp,18.dp,28.dp),verticalArrangement=Arrangement.spacedBy(12.dp)) {
+            if(title==null) {item {PlanQuietEmpty("此内容已不存在")};return@LazyColumn}
+            item(key="header") {
+                if(kind=="task" && task!=null && (!repeating || occurrence!=null)) TaskCard(TaskRow(task,occurrence),ui,vm)
+                else Column(verticalArrangement=Arrangement.spacedBy(6.dp)) {
+                    Text(title,style=MaterialTheme.typography.headlineSmall,fontWeight=FontWeight.SemiBold)
+                    if(kind=="task" && repeating) Text("重复任务",style=MaterialTheme.typography.bodySmall,color=LocalGlass.current.muted)
                 }
+                if(deleted || archived) Text(if(deleted) "已在回收站" else "已归档",Modifier.padding(top=8.dp),style=MaterialTheme.typography.bodySmall,color=LocalGlass.current.muted)
             }
-            if(kind=="event" && e!=null) {
-                val date=occurrence?.scheduledDate ?: e.startDate
-                val span=ChronoUnit.DAYS.between(LocalDate.parse(e.startDate),LocalDate.parse(e.endDateExclusive))-1
-                Text(date+" "+(if(e.allDay) "全天" else e.startTime)+" 至 "+LocalDate.parse(date).plusDays(span)+" "+if(e.allDay) "全天" else e.endTime)
-                Text(listOf(e.location,e.zoneId,stateName(occurrence?.status ?: e.status)).filter {it.isNotBlank()}.joinToString(" · "),color=LocalGlass.current.muted)
-                Text("日程与任务分别管理，时间结束不会自动完成任务。",color=LocalGlass.current.muted)
-                e.taskId?.let {task->TextButton(onClick={vm.detail("task",task)}) {Text("打开关联任务")}}
-                if(!deleted) {
-                    if(occurrence!=null) {
-                        TextButton(onClick={vm.run("本次状态已更新") {instance(occurrence.id,null,null,if(occurrence.status=="cancelled") "scheduled" else "cancelled")}}) {Text(if(occurrence.status=="cancelled") "恢复本次日程" else "取消本次日程")}
-                        TextButton(onClick={moveDate=true}) {Text("只调整本次日期")}
-                    } else TextButton(onClick={vm.manage(kind,id,"cancel")}) {Text(if(e.status=="cancelled") "恢复安排" else "取消日程")}
-                }
-            }
-            if(occurrence!=null && !deleted) {
-                SectionLabel("本次例外","原实例日期 "+occurrence.originalKey+"；调整后仍保留原身份")
-                OutlinedTextField(instanceTitle,{instanceTitle=it},label={Text("仅本次名称")},modifier=Modifier.fillMaxWidth())
-                TextButton(onClick={vm.run("本次名称已更新") {instance(occurrence.id,null,instanceTitle,null)}}) {Text("保存本次名称")}
-                if(kind=="task") TextButton(onClick={vm.run("本次已跳过") {instance(occurrence.id,null,null,"skipped")}}) {Text("跳过本次")}
-                TextButton(onClick={action="stop"}) {Text("停止本系列后续安排")}
-            }
-            if(kind=="habit" && h!=null) {
-                val today=LocalDate.now().toString();val r=s.habitRule(id,today)
-                Text(stateName(h.status)+" · "+h.startDate+" 起"+(h.endDate?.let {"，至 "+it} ?: ""),color=LocalGlass.current.muted)
-                Text("当前连续达标："+s.habitStreak(h,LocalDate.now()).toString()+(if(r?.scheduleType=="weekly") " 周" else " 个应做日"),color=LocalGlass.current.accent)
-                if(!deleted) {
-                    Button(onClick={logAdd=true}) {Text("登记打卡")}
-                    Row {
-                        TextButton(onClick={vm.manage(kind,id,"pause")}) {Text(if(h.status=="paused") "恢复习惯" else "暂停习惯")}
-                        if(h.status!="ended") TextButton(onClick={action="end"}) {Text("结束习惯")}
+            when(kind) {
+                "task"->if(task!=null) {
+                    if(repeating && occurrence==null) {
+                        val instances=s.occurrences.filter {it.entityType=="task" && it.entityId==id}.sortedBy {it.scheduledDate}
+                        item {PlanDetailHeading("各次安排",instances.size)}
+                        items(instances,key={"instance:"+it.id}) {TaskCard(TaskRow(task,it),ui,vm)}
                     }
+                    task.sourceRecordId?.let {source->item {PlanDetailEntry("来源记录",tag="planSourceRecord",kind="task",onClick={openRecord(source)})}}
                 }
-                SectionLabel("打卡日志","编辑会替换原条目，不会重复累加；时长以秒计")
-                TextButton(onClick={habitCalendar=true}) {Text("打卡月历 · "+(habitDate ?: "全部历史"))}
-                if(habitDate!=null) TextButton(onClick={habitDate=null}) {Text("查看全部日志")}
-                val allLogs=s.logs.filter {it.habitId==id}
-                val totals=allLogs.groupBy {s.habitRule(id,it.logDate)?.unit.orEmpty()}.map {(unit,logs)->PlanRules.display(logs.sumOf {it.valueMilli})+" "+unit}
-                Text("历史共 "+allLogs.map {it.logDate}.distinct().size+" 天"+(if(totals.isEmpty()) "" else "，累计 "+totals.joinToString("、")),color=LocalGlass.current.muted)
-                val logs=allLogs.filter {habitDate==null || it.logDate==habitDate}
-                if(logs.isEmpty()) Text("暂无打卡")
-                logs.forEach {l->GlassPanel(Modifier.fillMaxWidth()) {Column(Modifier.padding(14.dp)) {
-                    val rule=s.habitRule(id,l.logDate)
-                    Text(l.logDate+" · "+PlanRules.display(l.valueMilli)+" "+rule?.unit.orEmpty())
-                    if(l.note.isNotBlank()) Text(l.note,color=LocalGlass.current.muted)
-                    Row {TextButton(enabled=!deleted,onClick={logEdit=l.id}) {Text("编辑")}
-                        TextButton(enabled=!deleted,onClick={logDelete=l.id}) {Text("删除此条")}}
-                }}}
-                SectionLabel("规则历史")
-                s.habitRules.filter {it.habitId==id}.forEach {v->Text(v.effectiveFrom+" 起 · "+PlanRules.display(v.targetMilli)+" "+v.unit+" · "+
-                    when(v.scheduleType) {"daily"->"每天";"weekly"->"每周 "+v.weeklyDays+" 天";else->"星期 "+v.weekdays})}
-                s.pauses.filter {it.habitId==id}.forEach {p->Text("暂停："+p.startDate+" 至 "+(p.endDate ?: "现在"),color=LocalGlass.current.muted)}
-            }
-            if(kind=="focus" && focus!=null) {
-                FocusControls(focus,ui,vm,{correction=true})
-                SectionLabel("分段记录","只统计工作段；原始秒数与修正原因一并保留")
-                TextButton(enabled=!deleted,onClick={focusNote=true}) {Text("补充专注备注")}
-                if(focus.endedAt!=null) TextButton(onClick={action=if(deleted) "restore" else "trash"}) {Text(if(deleted) "恢复专注记录" else "移入回收站")}
-                s.segments.filter {it.sessionId==id}.forEach {seg->
-                    Text((if(seg.phase=="work") "工作" else "休息")+" · 第 "+seg.round+" 轮 · "+clockText(seg.seconds)+
-                        if(seg.endAt==null) " · 计时中" else "",color=LocalGlass.current.muted)
-                    seg.correctionReason?.let {Text("修正前 "+clockText(seg.originalSeconds ?: 0)+"；原因："+it)}
+                "event"->if(event!=null) {
+                    val row=PlanAgendaEvent(event,occurrence)
+                    item {GlassPanel(Modifier.fillMaxWidth()) {Column(Modifier.padding(18.dp),verticalArrangement=Arrangement.spacedBy(10.dp)) {
+                        Text(planDateLabel(row.startDate.toString())+(if(row.endDateExclusive>row.startDate.plusDays(1)) " — "+planDateLabel(row.endDateExclusive.minusDays(1).toString()) else ""),style=MaterialTheme.typography.titleMedium)
+                        Text(if(event.allDay) "全天" else event.startTime+"–"+event.endTime,style=MaterialTheme.typography.headlineSmall,color=LocalGlass.current.accent)
+                        if(event.location.isNotBlank()) Text(event.location,style=MaterialTheme.typography.bodyLarge)
+                        if(event.zoneId!=ZoneId.systemDefault().id) Text(event.zoneId,style=MaterialTheme.typography.bodySmall,color=LocalGlass.current.muted)
+                        if(row.status=="cancelled") Text("已取消",color=LocalGlass.current.muted)
+                    }}}
+                    event.taskId?.let {linked->item {PlanDetailEntry(s.tasks.find {it.id==linked}?.title ?: "关联任务",tag="planLinkedTask",kind="task",onClick={vm.detail("task",linked)})}}
                 }
-                if(focus.endedAt!=null && focus.taskId!=null && focus.state!="abandoned") {
-                    val linked=s.tasks.find {it.id==focus.taskId && it.deletedAt==null}
-                    if(linked!=null && linked.status!="done") {
-                        val needsChoice=s.subtasks.any {it.taskId==linked.id && it.completedAt==null} || s.rules.any {it.entityType=="task" && it.entityId==linked.id}
-                        TextButton(enabled=!ui.busy && !deleted,onClick={if(needsChoice) vm.detail("task",linked.id) else vm.task(TaskRow(linked),"done")}) {
-                            Text(if(needsChoice) "打开关联任务并确认完成" else "确认完成关联任务")
+                "habit"->if(habit!=null) {
+                    val rule=s.habitRule(id,today);val value=s.habitTotal(id,today)
+                    val ratio=if(rule!=null && rule.targetMilli>0) (value.toDouble()/rule.targetMilli).toFloat() else 0f
+                    val canLog=writable && habit.status=="active" && s.habitScheduled(habit,today)
+                    item {GlassPanel(Modifier.fillMaxWidth()) {Column(Modifier.padding(18.dp),verticalArrangement=Arrangement.spacedBy(14.dp)) {
+                        Row(verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(16.dp)) {
+                            PlanProgressRing(ratio,if(ratio>=1f) "✓" else "${(ratio*100).toInt().coerceIn(0,100)}%","今日打卡进度",measurable=rule!=null)
+                            Column(Modifier.weight(1f),verticalArrangement=Arrangement.spacedBy(4.dp)) {
+                                Text(if(rule!=null) planQuantity(value,rule.unit,habit.trackingType=="duration")+" / "+planQuantity(rule.targetMilli,rule.unit,habit.trackingType=="duration") else "暂无目标",style=MaterialTheme.typography.titleMedium)
+                                Text(stateName(habit.status)+" · 连续 "+s.habitStreak(habit,LocalDate.now())+(if(rule?.scheduleType=="weekly") " 周" else " 天"),style=MaterialTheme.typography.bodySmall,color=LocalGlass.current.muted)
+                            }
+                        }
+                        HabitWeek(s,habit,LocalDate.now())
+                        if(editable) GlassButton(enabled=canLog && !(habit.trackingType=="once" && value>=1000),onClick={logAdd=true},modifier=Modifier.fillMaxWidth().testTag("planPrimaryAction")) {
+                            Text(if(habit.trackingType=="once" && value>=1000) "今日已打卡" else if(habit.status=="paused") "已暂停" else if(habit.status=="ended") "已结束" else if(!s.habitScheduled(habit,today)) "今日休息" else "打卡")
+                        }
+                    }}}
+                    val all=s.logs.filter {it.habitId==id}.sortedWith(compareByDescending<HabitLog> {it.logDate}.thenByDescending {it.id})
+                    val logs=all.filter {habitDate==null || it.logDate==habitDate}
+                    item {PlanDetailHeading("打卡记录",logs.size) {IconButton(onClick={habitCalendar=true},modifier=Modifier.testTag("planHistoryDate").semantics {contentDescription="筛选打卡日期"}) {PlanGlyph("date")}}}
+                    if(habitDate!=null) item {TextButton(onClick={habitDate=null}) {Text(planDateLabel(habitDate!!)+" · 查看全部")}}
+                    if(logs.isEmpty()) item {PlanQuietEmpty("暂无打卡")}
+                    items(logs,key={"habit-log:"+it.id}) {log->
+                        val logRule=s.habitRule(id,log.logDate)
+                        PlanDetailEntry(planDateLabel(log.logDate)+" · "+planQuantity(log.valueMilli,logRule?.unit.orEmpty(),habit.trackingType=="duration"),log.note,
+                            "planLog:"+log.id,enabled=!ui.busy,onClick={vm.clearError();entryMenu="log:"+log.id})
+                    }
+                    item {GlassFormSection("规则与历史",id+":rule-history",collapsible=true,initiallyExpanded=false) {
+                        Text(habit.startDate+(habit.endDate?.let {" — $it"} ?: " 起"),style=MaterialTheme.typography.bodySmall,color=LocalGlass.current.muted)
+                        s.habitRules.filter {it.habitId==id}.sortedByDescending {it.effectiveFrom}.forEach {r->
+                            Text(r.effectiveFrom+" · "+planQuantity(r.targetMilli,r.unit,habit.trackingType=="duration")+" · "+when(r.scheduleType) {"daily"->"每天";"weekly"->"每周 ${r.weeklyDays} 天";else->"星期 "+r.weekdays},style=MaterialTheme.typography.bodyMedium)
+                        }
+                        s.pauses.filter {it.habitId==id}.forEach {p->Text("暂停 "+p.startDate+" — "+(p.endDate ?: "至今"),style=MaterialTheme.typography.bodySmall,color=LocalGlass.current.muted)}
+                    }}
+                }
+                "focus"->if(focus!=null) {
+                    item {FocusControls(focus,ui,vm,{correction=true})}
+                    focus.taskId?.let {linked->
+                        val linkedTask=s.tasks.find {it.id==linked}
+                        item {PlanDetailEntry(linkedTask?.title ?: "关联任务",tag="planLinkedTask",kind="task",onClick={vm.detail("task",linked)})}
+                        if(editable && focus.endedAt!=null && focus.state!="abandoned" && linkedTask!=null && linkedTask.deletedAt==null && linkedTask.archivedAt==null && linkedTask.status!="done") {
+                            item {TextButton(enabled=writable,onClick={
+                                val choice=s.subtasks.any {it.taskId==linked && it.completedAt==null} || s.rules.any {it.entityType=="task" && it.entityId==linked}
+                                if(choice) vm.detail("task",linked) else vm.task(TaskRow(linkedTask),"done")
+                            }) {Text("完成关联任务")}}
+                        }
+                    }
+                    val segments=s.segments.filter {it.sessionId==id}
+                    item {PlanDetailHeading("分段记录",segments.size)}
+                    items(segments,key={"segment:"+it.id}) {segment->GlassPanel(Modifier.fillMaxWidth()) {Column(Modifier.padding(16.dp),verticalArrangement=Arrangement.spacedBy(4.dp)) {
+                        Text((if(segment.phase=="work") "工作" else "休息")+" · 第 ${segment.round} 轮",style=MaterialTheme.typography.bodyMedium)
+                        Text(if(segment.endAt==null) "计时中" else clockText(segment.seconds),color=LocalGlass.current.accent)
+                        segment.correctionReason?.let {Text("原时长 "+clockText(segment.originalSeconds ?: 0)+" · "+it,style=MaterialTheme.typography.bodySmall,color=LocalGlass.current.muted)}
+                    }}}
+                }
+                "goal"->if(goal!=null) {
+                    val(value,target)=s.goalValue(goal);val ratio=if(target>0) (value.toDouble()/target).toFloat() else 0f
+                    item {GlassPanel(Modifier.fillMaxWidth()) {Column(Modifier.padding(18.dp),verticalArrangement=Arrangement.spacedBy(14.dp)) {
+                        Row(verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(16.dp)) {
+                            PlanProgressRing(ratio,if(target>0) "${(ratio*100).toInt().coerceIn(0,100)}%" else "—","目标进度",measurable=target>0)
+                            Column(Modifier.weight(1f),verticalArrangement=Arrangement.spacedBy(5.dp)) {
+                                Text(if(target>0) planQuantity(value,goal.unit,goal.goalType=="duration")+" / "+planQuantity(target,goal.unit,goal.goalType=="duration") else "待关联进度",style=MaterialTheme.typography.titleMedium)
+                                Text(listOfNotNull(stateName(goal.state),goal.endDate?.let {planDateLabel(it)+"截止"}).joinToString(" · "),style=MaterialTheme.typography.bodySmall,color=LocalGlass.current.muted)
+                            }
+                        }
+                        if(s.goalReview(goal)) Text("进度回落，待复核",style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.error)
+                        if(editable && goal.state!="done") GlassButton(enabled=writable,onClick={
+                            if(goal.state=="paused") vm.manage(kind,id,"pause") else when(goal.progressSource) {"manual"->logAdd=true;"milestones"->newMilestone=true;else->selectSources=true}
+                        },modifier=Modifier.fillMaxWidth().testTag("planPrimaryAction")) {Text(if(goal.state=="paused") "继续目标" else when(goal.progressSource) {"manual"->"记录进度";"milestones"->"添加里程碑";else->"关联事项"})}
+                    }}}
+                    when(goal.progressSource) {
+                        "manual"->{
+                            val logs=s.progress.filter {it.goalId==id}.sortedWith(compareByDescending<GoalProgress> {it.logDate}.thenByDescending {it.id})
+                            item {PlanDetailHeading("进度记录",logs.size)}
+                            if(logs.isEmpty()) item {PlanQuietEmpty("暂无记录")}
+                            items(logs,key={"goal-log:"+it.id}) {log->PlanDetailEntry(planDateLabel(log.logDate)+" · "+planQuantity(log.deltaMilli,goal.unit,goal.goalType=="duration"),log.note,
+                                "planLog:"+log.id,enabled=!ui.busy,onClick={vm.clearError();entryMenu="log:"+log.id})}
+                        }
+                        "tasks","focus"->{
+                            val links=s.goalLinks.filter {it.goalId==id}
+                            item {PlanDetailHeading("关联事项",links.size)}
+                            if(links.isEmpty()) item {PlanQuietEmpty("暂无关联")}
+                            items(links,key={"source:"+it.sourceId}) {link->
+                                val sourceTask=s.tasks.find {it.id==link.sourceId};val sourceFocus=s.sessions.find {it.id==link.sourceId}
+                                val sourceTitle=if(link.sourceType=="task") sourceTask?.title else sourceFocus?.title
+                                val subtitle=if(link.sourceType=="task") sourceTask?.let {stateName(it.status)+(if(it.deletedAt!=null) " · 已删除" else "")} else sourceFocus?.let {clockText(s.focusSeconds(it.id))+(if(it.deletedAt!=null) " · 已删除" else "")}
+                                PlanDetailEntry(sourceTitle ?: "来源已不存在",subtitle,"planLinkedSource:"+link.sourceId,kind=link.sourceType,enabled=!ui.busy,
+                                    onMore=if(editable) ({entryMenu="source:"+link.sourceId}) else null,
+                                    onClick={if(sourceTitle!=null) vm.detail(link.sourceType,link.sourceId) else if(editable) entryMenu="source:"+link.sourceId})
+                            }
+                        }
+                        "milestones"->{
+                            val milestones=s.milestones.filter {it.goalId==id}.sortedBy {it.sortOrder}
+                            item {PlanDetailHeading("里程碑",milestones.size)}
+                            if(milestones.isEmpty()) item {PlanQuietEmpty("暂无里程碑")}
+                            items(milestones,key={"milestone:"+it.id}) {m->GlassPanel(Modifier.fillMaxWidth().testTag("planMilestone:"+m.id)) {
+                                Row(Modifier.padding(horizontal=10.dp,vertical=8.dp),verticalAlignment=Alignment.CenterVertically) {
+                                    GlassCheckbox(m.completedAt!=null,{vm.run {milestone(id,m.title,m.dueDate,m.id,toggle=true)}},enabled=writable,modifier=Modifier.semantics {contentDescription="完成里程碑 ${m.title}"})
+                                    Column(Modifier.weight(1f).clickable(enabled=writable) {entryMenu="milestone:"+m.id}.padding(vertical=10.dp),verticalArrangement=Arrangement.spacedBy(4.dp)) {
+                                        Text(m.title,style=MaterialTheme.typography.bodyLarge)
+                                        m.dueDate?.let {Text(planDateLabel(it)+"截止",style=MaterialTheme.typography.bodySmall,color=LocalGlass.current.muted)}
+                                    }
+                                    if(editable) IconButton(enabled=writable,onClick={entryMenu="milestone:"+m.id},modifier=Modifier.semantics {contentDescription="管理里程碑 ${m.title}"}) {PlanGlyph("more",color=LocalGlass.current.muted)}
+                                }
+                            }}
                         }
                     }
                 }
             }
-            if(kind=="goal" && g!=null) {
-                val(v,target)=s.goalValue(g)
-                Text(PlanRules.display(v)+" / "+PlanRules.display(target)+" "+g.unit+" · "+stateName(g.state),style=MaterialTheme.typography.titleLarge,color=LocalGlass.current.accent)
-                if(s.goalReview(g)) Text("来源变化使进度回落，请复核并重新打开目标。",color=MaterialTheme.colorScheme.error)
-                Text(listOfNotNull(g.startDate?.let {"开始 "+it},g.endDate?.let {"结束 "+it}).joinToString(" · "),color=LocalGlass.current.muted)
-                if(!deleted) {
-                    if(g.progressSource=="manual") Button(onClick={logAdd=true}) {Text("记录进度")}
-                    if(g.progressSource in setOf("tasks","focus")) Button(onClick={selectSources=true}) {Text("管理关联来源")}
-                    if(g.progressSource=="milestones") Button(onClick={newMilestone=true}) {Text("添加里程碑")}
-                    Row {
-                        TextButton(onClick={action=if(g.state=="done") "reopen" else "done"}) {Text(if(g.state=="done") "重新打开" else "确认完成")}
-                        if(g.state!="done") TextButton(onClick={vm.manage(kind,id,"pause")}) {Text(if(g.state=="paused") "继续目标" else "暂停目标")}
-                    }
-                }
-                if(g.progressSource=="manual") s.progress.filter {it.goalId==id}.forEach {l->
-                    GlassPanel(Modifier.fillMaxWidth()) {Column(Modifier.padding(14.dp)) {
-                        Text(l.logDate+" · "+PlanRules.display(l.deltaMilli)+" "+g.unit);Text(l.note,color=LocalGlass.current.muted)
-                        Row {TextButton(enabled=!deleted,onClick={logEdit=l.id}) {Text("编辑")}
-                            TextButton(enabled=!deleted,onClick={logDelete=l.id}) {Text("删除此条")}}
-                    }}
-                }
-                if(g.progressSource in setOf("tasks","focus")) s.goalLinks.filter {it.goalId==id}.forEach {l->
-                    val label=if(l.sourceType=="task") s.tasks.find {it.id==l.sourceId}?.let {it.title+" · "+stateName(it.status)+(if(it.deletedAt!=null) " · 已删除，不计入进度" else "")}
-                        else s.sessions.find {it.id==l.sourceId}?.let {it.title+" · "+clockText(s.focusSeconds(it.id))}
-                    GlassPanel(Modifier.fillMaxWidth()) {Column(Modifier.padding(14.dp)) {
-                        TextButton(onClick={vm.detail(l.sourceType,l.sourceId)}) {Text(label ?: "来源已不存在")}
-                        TextButton(enabled=!deleted,onClick={action="unlink:"+l.sourceId}) {Text("解除关联并重算进度")}
-                    }}
-                }
-                if(g.progressSource=="milestones") s.milestones.filter {it.goalId==id}.forEach {m->
-                    GlassPanel(Modifier.fillMaxWidth()) {Column(Modifier.padding(12.dp)) {
-                        Row(verticalAlignment=Alignment.CenterVertically) {
-                            Checkbox(m.completedAt!=null,{vm.run {milestone(id,m.title,m.dueDate,m.id,toggle=true)}},enabled=!ui.busy && !deleted)
-                            Text(m.title,Modifier.weight(1f))
-                        }
-                        m.dueDate?.let {Text("截止 "+it,color=LocalGlass.current.muted)}
-                        Row {TextButton(enabled=!deleted,onClick={milestone=m}) {Text("编辑")}
-                            TextButton(enabled=!deleted,onClick={action="milestone:"+m.id}) {Text("删除里程碑")}}
-                    }}
-                }
+            if(note.isNotBlank()) item {PlanDetailHeading("备注");GlassPanel(Modifier.fillMaxWidth()) {Column(Modifier.padding(16.dp)) {MarkdownBody(note)}}}
+            if(!deleted && kind in setOf("task","event","habit")) item {
+                val summary=planReminderSummary(s,kind,id,occurrence)
+                PlanDetailEntry("提醒",summary.label,"planReminderStatus",kind="bell",enabled=!ui.busy,onClick={reminder=true})
             }
-            if(kind!="focus") {
-                val files=records.attachmentsFor(kind,id)
-                if(files.isNotEmpty()) {SectionLabel("附件");files.forEach {a->TextButton(onClick={view(a)}) {Text(a.displayName)}}}
-                if(deleted) TextButton(enabled=!ui.busy,onClick={vm.manage(kind,id,"restore")}) {Text("从回收站恢复")}
-                else {
-                    Row(Modifier.horizontalScroll(rememberScrollState())) {
-                        if(kind in setOf("task","event")) TextButton(enabled=!ui.busy,onClick={vm.duplicate(kind,id)}) {Text("复制为新草稿")}
-                        if(kind in setOf("task","event","goal")) TextButton(enabled=!ui.busy,onClick={vm.manage(kind,id,"archive")}) {Text("切换归档")}
-                        TextButton(enabled=!ui.busy,onClick={action="trash"}) {Text("移入回收站")}
-                    }
-                }
+            val files=records.attachmentsFor(kind,id)
+            if(files.isNotEmpty()) {
+                item {PlanDetailHeading("附件",files.size)}
+                items(files,key={"file:"+it.id}) {file->PlanDetailEntry(file.displayName,tag="planAttachment:"+file.id,onClick={view(file)})}
             }
-            Spacer(Modifier.height(28.dp))
+            if(ui.error!=null) item {Text(ui.error,color=MaterialTheme.colorScheme.error,style=MaterialTheme.typography.bodySmall)}
         }
     }
-    if(moveDate) CalendarDialog(occurrence?.scheduledDate ?: t?.plannedDate ?: e?.startDate ?: LocalDate.now().toString(),{moveDate=false}) {date->
-        if(occurrence!=null) vm.run("本次日期已调整") {instance(occurrence.id,date,null,null)}
+    if(menu) GlassSheet("更多操作",{menu=false},dismissEnabled=!ui.busy) {
+        fun closeAnd(block:()->Unit) {menu=false;block()}
+        if(deleted) PlanDetailMenuAction("恢复","restorePlanDetail",!ui.busy) {vm.run("已恢复",onSuccess={menu=false}) {manage(kind,id,"restore")}}
+        else {
+            if(archived && kind in setOf("task","event","goal")) PlanDetailMenuAction("取消归档","unarchivePlanDetail",!ui.busy) {vm.run("已取消归档",onSuccess={menu=false}) {manage(kind,id,"archive")}}
+            if(editable && kind!="focus") PlanDetailMenuAction(if(repeating) "编辑系列" else "编辑信息","editPlanDetail",!ui.busy) {closeAnd {vm.begin(kind,id=id)}}
+            if(editable && task!=null && (!repeating || occurrence!=null)) {
+                val row=TaskRow(task,occurrence)
+                listOf("doing" to "开始处理","todo" to "回到待办","cancelled" to "取消任务").filter {it.first!=row.status}.forEach {(state,label)->
+                    PlanDetailMenuAction(label,"taskState:$state",!ui.busy) {vm.run("状态已更新",onSuccess={menu=false}) {taskAction(row,state)}}
+                }
+            }
+            if(editable && event!=null) PlanDetailMenuAction(if((occurrence?.status ?: event.status)=="cancelled") "恢复安排" else "取消日程","eventState",!ui.busy) {
+                vm.run("状态已更新",onSuccess={menu=false}) {if(occurrence!=null) instance(occurrence.id,null,null,if(occurrence.status=="cancelled") "scheduled" else "cancelled") else manage(kind,id,"cancel")}
+            }
+            if(editable && occurrence!=null) {
+                PlanDetailMenuAction("修改本次名称","renamePlanInstance",!ui.busy) {closeAnd {rename=true}}
+                PlanDetailMenuAction("调整本次日期","movePlanInstance",!ui.busy) {closeAnd {moveDate=true}}
+                if(kind=="task") PlanDetailMenuAction("跳过本次","skipPlanInstance",!ui.busy) {vm.run("本次已跳过",onSuccess={menu=false}) {instance(occurrence.id,null,null,"skipped")}}
+                PlanDetailMenuAction("停止后续安排","stopPlanSeries",!ui.busy) {closeAnd {action="stop"}}
+            }
+            if(editable && habit!=null && habit.status!="ended") {
+                PlanDetailMenuAction(if(habit.status=="paused") "继续习惯" else "暂停习惯","pausePlanHabit",!ui.busy) {vm.run("状态已更新",onSuccess={menu=false}) {manage(kind,id,"pause")}}
+                PlanDetailMenuAction("结束习惯","endPlanHabit",!ui.busy) {closeAnd {action="end"}}
+            }
+            if(editable && goal!=null) {
+                if(goal.progressSource in setOf("tasks","focus")) PlanDetailMenuAction("管理关联事项","manageGoalSources",!ui.busy) {closeAnd {selectSources=true}}
+                PlanDetailMenuAction(if(goal.state=="done") "重新打开" else "确认完成","completePlanGoal",!ui.busy) {closeAnd {action=if(goal.state=="done") "reopen" else "done"}}
+                if(goal.state!="done") PlanDetailMenuAction(if(goal.state=="paused") "继续目标" else "暂停目标","pausePlanGoal",!ui.busy) {vm.run("状态已更新",onSuccess={menu=false}) {manage(kind,id,"pause")}}
+            }
+            if(editable && focus!=null) {
+                PlanDetailMenuAction(if(note.isBlank()) "添加备注" else "修改备注","notePlanFocus",!ui.busy) {closeAnd {focusNote=true}}
+                if(focus.state in setOf("finished","early")) PlanDetailMenuAction("修正有效时长","correctPlanFocus",!ui.busy) {closeAnd {correction=true}}
+            }
+            if(kind in setOf("task","event")) PlanDetailMenuAction("复制为新事项","duplicatePlanDetail",!ui.busy) {closeAnd {vm.duplicate(kind,id)}}
+            if(editable && kind in setOf("task","event","goal")) PlanDetailMenuAction("归档","archivePlanDetail",!ui.busy) {vm.run("已归档",onSuccess={menu=false}) {manage(kind,id,"archive")}}
+            if(kind!="focus" || focus?.endedAt!=null) PlanDetailMenuAction("移入回收站","trashPlanDetail",!ui.busy,true) {closeAnd {action="trash"}}
+        }
+        ui.error?.let {Text(it,color=MaterialTheme.colorScheme.error)}
     }
-    action?.let {a->ConfirmDialog("确认操作",when {
-        a=="trash"->"内容与附件引用会保留在回收站，可以恢复。"+if(s.goalLinks.any {it.sourceType==kind && it.sourceId==id}) "此项同时是目标来源，删除后会重新计算目标进度，已完成目标可能需要复核。" else ""
-        a=="stop"->"从今天起未处理的重复实例会撤销，已经完成和过去的实例保留。"
-        a.startsWith("unlink:")->"解除后会重新计算分母和已完成数量，目标进度可能变化。"
-        a.startsWith("milestone:")->"删除后会重新计算目标进度。"
-        a=="done"->"按当前进度确认完成；来源后续回退时会显示待复核。"
-        else->"此操作会更新当前状态。"
-    },{action=null},{
+    if(entryMenu!=null) GlassSheet("记录",{entryMenu=null},dismissEnabled=!ui.busy) {
+        val key=entryMenu!!
         when {
-            a=="stop" && occurrence!=null->vm.run {stop(occurrence.ruleId)}
-            a.startsWith("unlink:") && g!=null->vm.run {link(id,if(g.progressSource=="tasks") "task" else "focus",a.substringAfter(":"),true)}
-            a.startsWith("milestone:")->vm.run {val m=s.milestones.first {it.id==a.substringAfter(":")};milestone(id,m.title,m.dueDate,m.id,delete=true)}
-            else->vm.manage(kind,id,a)
+            key.startsWith("log:")->{
+                val logId=key.substringAfter(":")
+                val habitEntry=s.logs.find {it.habitId==id && it.id==logId}
+                val goalEntry=s.progress.find {it.goalId==id && it.id==logId}
+                val date=habitEntry?.logDate ?: goalEntry?.logDate
+                if(date!=null) {
+                    Text(planDateLabel(date),style=MaterialTheme.typography.titleMedium)
+                    val amount=habitEntry?.let {entry->planQuantity(entry.valueMilli,s.habitRule(id,date)?.unit.orEmpty(),habit?.trackingType=="duration")}
+                        ?: goalEntry?.let {entry->planQuantity(entry.deltaMilli,goal?.unit.orEmpty(),goal?.goalType=="duration")}.orEmpty()
+                    Text(amount,style=MaterialTheme.typography.headlineSmall,color=LocalGlass.current.accent)
+                    (habitEntry?.note ?: goalEntry?.note)?.takeIf {it.isNotBlank()}?.let {MarkdownBody(it)}
+                    if(editable) {
+                        HorizontalDivider(color=LocalGlass.current.accent.copy(alpha=.12f))
+                        PlanDetailMenuAction("修改记录","editPlanLog",!ui.busy) {entryMenu=null;logEdit=logId}
+                        PlanDetailMenuAction("删除记录","deletePlanLog",!ui.busy,true) {entryMenu=null;logDelete=logId}
+                    }
+                } else Text("此记录已不存在",color=LocalGlass.current.muted)
+            }
+            key.startsWith("milestone:")->{
+                val m=s.milestones.find {it.id==key.substringAfter(":")}
+                if(m!=null && editable) {
+                    PlanDetailMenuAction("调整里程碑","editPlanMilestone",!ui.busy) {entryMenu=null;milestoneEdit=m}
+                    PlanDetailMenuAction("删除里程碑","deletePlanMilestone",!ui.busy,true) {entryMenu=null;action="milestone:"+m.id}
+                }
+            }
+            key.startsWith("source:") && editable->PlanDetailMenuAction("解除关联","unlinkGoalSource",!ui.busy,true) {entryMenu=null;action="unlink:"+key.substringAfter(":")}
         }
-    })}
-    if(kind=="habit" && h!=null && (logAdd || logEdit!=null)) {
-        val l=s.logs.find {it.id==logEdit}
-        ValueLogSheet("习惯打卡",l?.logDate ?: LocalDate.now().toString(),l?.let {PlanRules.display(it.valueMilli)} ?: "1",l?.note.orEmpty(),h.trackingType=="once",
-            {logAdd=false;logEdit=null}) {d,v,n->vm.run(onSuccess={logAdd=false;logEdit=null}) {habitLog(id,d,v,n,l?.id)}}
     }
-    if(kind=="goal" && (logAdd || logEdit!=null)) {
-        val l=s.progress.find {it.id==logEdit}
-        ValueLogSheet("目标进度",l?.logDate ?: LocalDate.now().toString(),l?.let {PlanRules.display(it.deltaMilli)} ?: "1",l?.note.orEmpty(),
-            dismiss={logAdd=false;logEdit=null}) {d,v,n->vm.run(onSuccess={logAdd=false;logEdit=null}) {goalLog(id,d,v,n,l?.id)}}
-    }
-    logDelete?.let {deleteId->ConfirmDialog("删除这条日志？","只删除所选条目，并重新计算进度。",{logDelete=null},{
-        if(kind=="habit") vm.run {val l=s.logs.first {it.id==deleteId};habitLog(id,l.logDate,"1",id=l.id,delete=true)}
-        else vm.run {val l=s.progress.first {it.id==deleteId};goalLog(id,l.logDate,"1","",l.id,true)}
-    })}
-    if(selectSources && g!=null) GlassSheet("关联来源",{selectSources=false}) {
-        val options=if(g.progressSource=="tasks") s.tasks.filter {it.deletedAt==null && s.rules.none {r->r.entityId==it.id}}.map {it.id to it.title}
-            else s.sessions.filter {it.deletedAt==null && it.state in setOf("finished","early")}.map {it.id to (it.title+" · "+clockText(s.focusSeconds(it.id)))}
-        Text("同一来源只计入一次。已关联的来源可在详情解除。")
-        options.forEach {(source,label)->val linked=s.goalLinks.any {it.goalId==id && it.sourceId==source}
-            GlassChoice(label,linked,Modifier.fillMaxWidth()) {if(!linked) vm.run {link(id,if(g.progressSource=="tasks") "task" else "focus",source)}}
+    if(reminder) GlassSheet("提醒",{reminder=false}) {PlanReminderStatus(ui,vm,kind,id,occurrence)}
+    if(moveDate && occurrence!=null && editable) PlanDatePicker(occurrence.scheduledDate,{moveDate=false}) {date->vm.run("本次日期已调整",onSuccess={moveDate=false}) {instance(occurrence.id,date,null,null)}}
+    if(rename && occurrence!=null && editable) {
+        var text by remember(occurrence.id) {mutableStateOf(occurrence.title ?: title.orEmpty())}
+        GlassSheet("本次名称",{rename=false},dismissEnabled=!ui.busy,footer={GlassButton(enabled=!ui.busy,onClick={vm.run("本次名称已更新",onSuccess={rename=false}) {instance(occurrence.id,null,text,null)}},modifier=Modifier.fillMaxWidth().testTag("savePlanInstanceName")) {Text("保存")}}) {
+            GlassTextField(text,{text=it},label={Text("名称")},modifier=Modifier.fillMaxWidth().testTag("planInstanceName"))
+            ui.error?.let {Text(it,color=MaterialTheme.colorScheme.error)}
         }
-        if(options.isEmpty()) Text("暂无可关联内容，请先创建任务或完成一段专注")
     }
-    if(newMilestone || milestone!=null) MilestoneSheet(milestone,ui.busy,{newMilestone=false;milestone=null}) {name,date->
-        val item=milestone
-        vm.run(onSuccess={newMilestone=false;milestone=null}) {milestone(id,name,date,item?.id)}
+    action?.let {a->ConfirmDialog(if(a=="trash") "移入回收站？" else "确认操作",when {
+        a=="trash"->"可在回收站恢复。"+(if(repeating) "此操作作用于整个重复系列。" else "")+(if(s.goalLinks.any {it.sourceType==kind && it.sourceId==id}) "关联目标的进度会重新计算。" else "")
+        a=="stop"->"撤销今天起未处理的安排，已完成和过去记录保留。"
+        a.startsWith("unlink:")->"解除后将重新计算目标进度。"
+        a.startsWith("milestone:")->"删除后将重新计算目标进度。"
+        a=="done"->"按当前进度确认完成。"
+        else->"确认更新当前状态？"
+    },{action=null},{
+        if(!ui.busy) vm.run("已更新",onSuccess={action=null}) {when {
+            a=="stop" && occurrence!=null->stop(occurrence.ruleId)
+            a.startsWith("unlink:") && goal!=null->link(id,if(goal.progressSource=="tasks") "task" else "focus",a.substringAfter(":"),true)
+            a.startsWith("milestone:")->{val m=s.milestones.first {it.id==a.substringAfter(":")};milestone(id,m.title,m.dueDate,m.id,delete=true)}
+            else->manage(kind,id,a)
+        }}
+    })}
+    if(kind=="habit" && habit!=null && editable && (logAdd || s.logs.any {it.habitId==id && it.id==logEdit})) {
+        val log=s.logs.find {it.id==logEdit}
+        val defaultValue=if(habit.trackingType=="duration") s.habitRule(id,today)?.let {PlanRules.display(it.targetMilli)} ?: "1800" else "1"
+        ValueLogSheet("习惯打卡",log?.logDate ?: today,log?.let {PlanRules.display(it.valueMilli)} ?: defaultValue,log?.note.orEmpty(),habit.trackingType=="once",
+            {logAdd=false;logEdit=null},busy=ui.busy,duration=habit.trackingType=="duration",error=ui.error) {d,v,n->vm.run(onSuccess={logAdd=false;logEdit=null}) {habitLog(id,d,v,n,log?.id)}}
     }
-    if(correction && focus!=null) ValueLogSheet("修正有效工作秒数",LocalDate.now().toString(),s.focusSeconds(id).toString(),"",
-        dismiss={correction=false}) {_,v,n->vm.run(onSuccess={correction=false}) {focusAction(id,"correct",n,v.toLongOrNull())}}
-    if(habitCalendar) CalendarDialog(habitDate ?: LocalDate.now().toString(),{habitCalendar=false},
-        s.logs.filter {it.habitId==id}.map {it.logDate}.toSet()) {habitDate=it}
-    if(focusNote && focus!=null) {
-        var text by remember {mutableStateOf(focus.note)}
-        GlassSheet("专注备注",{focusNote=false}) {
-            OutlinedTextField(text,{text=it},label={Text("备注 · 支持 Markdown")},minLines=4,modifier=Modifier.fillMaxWidth())
-            Button(enabled=!ui.busy,onClick={vm.run(onSuccess={focusNote=false}) {focusNote(id,text)}}) {Text("保存备注")}
+    if(kind=="goal" && goal!=null && editable && (logAdd || s.progress.any {it.goalId==id && it.id==logEdit})) {
+        val log=s.progress.find {it.id==logEdit}
+        ValueLogSheet("目标进度",log?.logDate ?: today,log?.let {PlanRules.display(it.deltaMilli)} ?: if(goal.goalType=="duration") "900" else "1",log?.note.orEmpty(),dismiss={logAdd=false;logEdit=null},busy=ui.busy,duration=goal.goalType=="duration",error=ui.error,allowNegative=true) {d,v,n->vm.run(onSuccess={logAdd=false;logEdit=null}) {goalLog(id,d,v,n,log?.id)}}
+    }
+    logDelete?.let {logId->ConfirmDialog("删除记录？","删除后将重新计算进度。",{logDelete=null},{if(writable) vm.run("记录已删除",onSuccess={logDelete=null}) {
+        if(kind=="habit") {val log=s.logs.first {it.id==logId};habitLog(id,log.logDate,"1",id=log.id,delete=true)}
+        else {val log=s.progress.first {it.id==logId};goalLog(id,log.logDate,"1","",log.id,true)}
+    }})}
+    if(selectSources && goal!=null && editable) {
+        val existing=s.goalLinks.filter {it.goalId==id}.map {it.sourceId}.toSet()
+        val options=if(goal.progressSource=="tasks") s.tasks.filter {it.id in existing || it.deletedAt==null && it.archivedAt==null && s.rules.none {r->r.entityType=="task" && r.entityId==it.id}}.map {it.id to (it.title+(if(it.deletedAt!=null) " · 已删除" else if(it.archivedAt!=null) " · 已归档" else ""))}
+            else s.sessions.filter {it.id in existing || it.deletedAt==null && it.state in setOf("finished","early")}.map {it.id to it.title}
+        val allOptions=options+existing.filter {source->options.none {it.first==source}}.map {it to "来源已不存在"}
+        GlassMultiSelectionSheet("关联事项",allOptions,existing,{selectSources=false},busy=ui.busy,error=ui.error,closeOnConfirm=false) {chosen->vm.run("关联已更新",onSuccess={selectSources=false}) {setGoalSources(id,chosen)}}
+    }
+    if((newMilestone || milestoneEdit!=null) && editable) MilestoneSheet(milestoneEdit,ui.busy,ui.error,{newMilestone=false;milestoneEdit=null}) {name,date->
+        val item=milestoneEdit
+        vm.run(onSuccess={newMilestone=false;milestoneEdit=null}) {milestone(id,name,date,item?.id)}
+    }
+    if(correction && focus!=null && editable) ValueLogSheet("修正有效时长",today,s.focusSeconds(id).toString(),"",dismiss={correction=false},busy=ui.busy,duration=true,error=ui.error,integerSeconds=true) {_,v,n->
+        vm.run(onSuccess={correction=false}) {focusAction(id,"correct",n,v.toLongOrNull())}
+    }
+    if(habitCalendar) PlanDatePicker(habitDate ?: today,{habitCalendar=false},s.logs.filter {it.habitId==id}.map {it.logDate}.toSet()) {habitDate=it}
+    if(focusNote && focus!=null && editable) {
+        var text by remember(id) {mutableStateOf(focus.note)}
+        GlassSheet("专注备注",{focusNote=false},dismissEnabled=!ui.busy,footer={GlassButton(enabled=!ui.busy,onClick={vm.run(onSuccess={focusNote=false}) {focusNote(id,text)}},modifier=Modifier.fillMaxWidth()) {Text("保存")}}) {
+            GlassTextField(text,{text=it},label={Text("备注")},minLines=4,modifier=Modifier.fillMaxWidth())
+            ui.error?.let {Text(it,color=MaterialTheme.colorScheme.error)}
         }
     }
 }
-@Composable private fun FocusControls(s:FocusSession,ui:PlansUi,vm:PlansViewModel,correct:()->Unit) {
-    val total=ui.data.focusSeconds(s.id)+(if(s.state=="running" && s.phase=="work") ui.liveSeconds else 0)
-    Text(clockText(total),style=MaterialTheme.typography.displayMedium)
-    Text(stateName(s.state)+" · "+if(s.phase=="work") "工作，第 "+s.round+" 轮" else "休息，不计入专注",color=LocalGlass.current.accent)
-    val active=s.state in setOf("running","paused","review","awaiting")
-    if(active) {
-        if(s.state=="review" || ui.clockReview) Text("计时基准发生变化。继续会丢弃无法确认的开放时段，已完成工作段保留。",color=MaterialTheme.colorScheme.error)
-        val choices=when(s.state) {
-            "running"->listOf("pause" to "暂停")
-            "paused"->listOf("resume" to "继续")
-            else->listOf("recover" to "核对后继续")
-        }+if(s.mode=="pomodoro") {
-            if(s.phase=="work") listOf("break" to "完成本轮，休息") else listOf("next" to "开始下一轮")
-        } else emptyList()
-        FlowChoices(choices,null) {vm.focus(s.id,it)}
-        var confirm by remember {mutableStateOf<String?>(null)}
-        FlowChoices(listOf("finish" to "正常结束","early" to "提前结束","abandon" to "放弃本次"),null) {confirm=it}
-        confirm?.let {a->ConfirmDialog("结束这次专注？",if(a=="abandon") "放弃的记录会保留，但不进入有效专注统计和目标。" else "只计入工作时间，暂停与休息会排除。",{confirm=null},{vm.focus(s.id,a)})}
-    } else if(s.state in setOf("finished","early")) TextButton(onClick=correct) {Text("修正有效时长并填写原因")}
-}
-@Composable private fun MilestoneSheet(item:Milestone?,busy:Boolean,dismiss:()->Unit,save:(String,String?)->Unit) {
-    var title by remember {mutableStateOf(item?.title.orEmpty())};var date by remember {mutableStateOf(item?.dueDate.orEmpty())}
+
+@Composable private fun MilestoneSheet(item:Milestone?,busy:Boolean,error:String?,dismiss:()->Unit,save:(String,String?)->Unit) {
+    var title by remember(item?.id) {mutableStateOf(item?.title.orEmpty())}
+    var date by remember(item?.id) {mutableStateOf(item?.dueDate.orEmpty())}
     var calendar by remember {mutableStateOf(false)}
-    GlassSheet("里程碑",dismiss) {
-        OutlinedTextField(title,{title=it},label={Text("里程碑名称")},modifier=Modifier.fillMaxWidth())
+    GlassSheet("里程碑",dismiss,dismissEnabled=!busy,footer={GlassButton(enabled=!busy,onClick={save(title,date.ifBlank {null})},modifier=Modifier.fillMaxWidth().testTag("saveMilestone")) {Text("保存")}}) {
+        GlassTextField(title,{title=it},label={Text("名称")},modifier=Modifier.fillMaxWidth().testTag("milestoneName"))
         DateRow("截止日期",date,{calendar=true},{date=""})
-        Button(enabled=!busy,onClick={save(title,date.ifBlank {null})}) {Text("保存里程碑")}
+        error?.let {Text(it,color=MaterialTheme.colorScheme.error)}
     }
-    if(calendar) CalendarDialog(date,{calendar=false}) {date=it}
+    if(calendar) PlanDatePicker(date,{calendar=false}) {date=it}
 }

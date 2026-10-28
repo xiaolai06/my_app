@@ -6,7 +6,8 @@ $taskIssues = [System.Collections.Generic.List[object]]::new()
 $taskMarkdown = [System.Collections.Generic.List[string]]::new()
 $taskQueue = [System.Collections.Generic.Queue[string]]::new()
 $taskQueue.Enqueue($taskRoot)
-$taskSkipDirectories = @('.git', '.gradle', 'build', 'node_modules', 'diagnostics', '.idea', '.agents', '.codex', 'private-data', 'release-output')
+$taskSkipDirectories = @('.git', '.gradle', 'build', 'node_modules', 'diagnostics', '.idea', '.agents', '.codex', 'private-data', 'release-output', 'android-setup', 'AndroidEnvironmentCheck')
+$taskLocalReferenceRoot = Join-Path $taskRoot 'references/liquid-glass'
 $taskAnchorCache = @{}
 $taskLocalLinkCount = 0
 
@@ -24,6 +25,8 @@ while ($taskQueue.Count -gt 0) {
     foreach ($taskEntry in Get-ChildItem -LiteralPath $taskQueue.Dequeue() -Force) {
         if (($taskEntry.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) { continue }
         if ($taskEntry.PSIsContainer) {
+            # This ignored third-party source bundle is kept locally, outside the maintained documents.
+            if ($taskEntry.FullName -eq $taskLocalReferenceRoot) { continue }
             if ($taskEntry.Name -notin $taskSkipDirectories) { $taskQueue.Enqueue($taskEntry.FullName) }
         } elseif ($taskEntry.Extension -eq '.md') { $taskMarkdown.Add($taskEntry.FullName) }
     }
@@ -111,7 +114,7 @@ if ($taskDesign.Count -eq 3) {
     $taskMotion = $taskDesign['motion-tokens.json']
     if ($taskVisual.version -ne $taskGlass.version -or $taskVisual.version -ne $taskMotion.version) { Add-TaskIssue 'design-system/daily-life/' 0 'Design JSON versions do not match' }
     if ($taskVisual.layout -ne 'comfortable-grouped' -or $taskGlass.layout -ne $taskVisual.layout) { Add-TaskIssue 'design-system/daily-life/' 0 'Layout does not match the current comfortable grouped design' }
-    if ($taskVisual.scope -ne 'five-destination-personal' -or $taskGlass.navigation.columns -ne 5 -or ($taskGlass.navigation.labels -join '/') -ne '今天/记录/计划/账本/功能箱') { Add-TaskIssue 'design-system/daily-life/' 0 'Five destinations or navigation order do not match the current specification' }
+    if ($taskVisual.scope -ne 'five-destination-personal' -or $taskGlass.navigation.columns -ne 5 -or ($taskGlass.navigation.labels -join '/') -ne '首页/记录/计划/账本/我的') { Add-TaskIssue 'design-system/daily-life/' 0 'Five destinations or navigation order do not match the current specification' }
     if ($taskVisual.minimumTouchTargetDp -lt 48 -or $taskVisual.minimumRowHeightDp -lt 72 -or $taskGlass.readability.minimumTaskRowDp -ne $taskVisual.minimumRowHeightDp) { Add-TaskIssue 'design-system/daily-life/' 0 'Touch or row sizes do not match the current specification' }
 }
 

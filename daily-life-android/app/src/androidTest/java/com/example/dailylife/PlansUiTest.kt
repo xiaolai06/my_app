@@ -30,8 +30,12 @@ class PlansUiTest {
             compose.onNodeWithTag("completeTask:"+task.id).performScrollTo().performClick()
             compose.waitUntil(8000) {runBlocking {repo.dao.tasks().first {it.id==task.id}.status=="done"}}
             ready()
-            compose.onNodeWithTag("completeTask:"+task.id).performClick()
+            compose.onNodeWithTag("planViews").performClick()
+            compose.onNodeWithText("已完成",substring=false).performClick()
+            compose.onNodeWithTag("completeTask:"+task.id).performScrollTo().performClick()
             compose.waitUntil(8000) {runBlocking {repo.dao.tasks().first {it.id==task.id}.status=="todo"}}
+            compose.onNodeWithTag("planViews").performClick()
+            compose.onNodeWithText("待办",substring=false).performClick()
             screenshot("plans-tasks-light.png")
             compose.activityRule.scenario.recreate()
             compose.waitUntil(15000) {compose.onAllNodesWithTag("addPlan").fetchSemanticsNodes().isNotEmpty()}
@@ -45,13 +49,13 @@ class PlansUiTest {
             screenshot("plans-calendar-light.png")
             tab("习惯");add("habit","每天，读几页喜欢的书")
             compose.onNodeWithTag("backPlanDetail").performClick()
-            compose.onNodeWithText("登记打卡").performScrollTo().performClick()
-            compose.onNodeWithText("保存本次记录").performScrollTo().performClick()
+            compose.onNodeWithText("打卡",substring=false).performScrollTo().performClick()
+            compose.onNodeWithTag("savePlanLog").performClick()
             compose.waitUntil(10000) {runBlocking {repo.dao.habitLogs().any {it.habitId !in initial.habits.map {h->h.id}}}}
             screenshot("plans-habits-light.png")
             tab("目标");add("goal","给生活一点小小的期待")
             compose.onNodeWithText("记录进度").performScrollTo().performClick()
-            compose.onNodeWithText("保存本次记录").performScrollTo().performClick()
+            compose.onNodeWithTag("savePlanLog").performClick()
             compose.waitUntil(10000) {runBlocking {repo.dao.progress().isNotEmpty()}}
             compose.onNodeWithTag("backPlanDetail").performClick()
             screenshot("plans-goals-light.png")
@@ -60,8 +64,9 @@ class PlansUiTest {
             compose.waitUntil(10000) {runBlocking {repo.dao.sessions().any {it.title=="留一段完整的时间" && it.state=="paused"}}}
             compose.onNodeWithText("继续",substring=false).performScrollTo().performClick()
             compose.waitUntil(5000) {runBlocking {repo.dao.sessions().firstOrNull {it.title=="留一段完整的时间"}?.let {repo.openSeconds(it)?.let {n->n>=2}==true}==true}}
-            compose.onNodeWithText("提前结束",substring=false).performScrollTo().performClick()
-            compose.onNodeWithText("确认",substring=false).performClick()
+            compose.onNodeWithTag("focusEnd").performScrollTo().performClick()
+            compose.onNodeWithTag("focusEarly").performClick()
+            compose.onNodeWithText("确定",substring=false).performClick()
             compose.waitUntil(10000) {runBlocking {repo.dao.sessions().any {it.title=="留一段完整的时间" && it.state=="early"}}}
             compose.onNodeWithTag("backPlanDetail").performClick()
             screenshot("plans-focus-light.png")
@@ -84,7 +89,6 @@ class PlansUiTest {
     }
     private fun add(kind:String,title:String) {
         compose.onNodeWithTag("addPlan").performClick()
-        compose.onNodeWithTag("newPlan:"+kind).performScrollTo().performClick()
         compose.waitUntil(10000) {compose.onAllNodesWithTag("planTitle").fetchSemanticsNodes().isNotEmpty()}
         ready()
         compose.onNodeWithTag("planTitle").performTextReplacement(title)

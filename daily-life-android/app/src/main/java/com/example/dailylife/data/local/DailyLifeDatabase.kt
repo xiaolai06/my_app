@@ -15,8 +15,8 @@ import androidx.room.AutoMigration
     TransactionTemplate::class,MonthlyBudget::class,BudgetAlert::class,ReimbursementClaim::class,ReimbursementItem::class,
     LedgerChangeLog::class,LedgerImportBatch::class,LedgerImportRow::class,
     ToolEntry::class,ToolChild::class,ToolLog::class,ToolLink::class,ToolDraft::class,ToolCalculation::class,
-    ToolPaymentPeriod::class,ToolPaymentSettlement::class,FeaturePreference::class], version = 3, exportSchema = true,
-    autoMigrations = [AutoMigration(from = 1, to = 2),AutoMigration(from = 2,to = 3)])
+    ToolPaymentPeriod::class,ToolPaymentSettlement::class,FeaturePreference::class], version = 4, exportSchema = true,
+    autoMigrations = [AutoMigration(from = 1, to = 2),AutoMigration(from = 2,to = 3),AutoMigration(from = 3,to = 4)])
 abstract class DailyLifeDatabase : RoomDatabase() {
     abstract fun records(): RecordsDao
     abstract fun plans(): PlansDao

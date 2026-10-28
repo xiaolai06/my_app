@@ -16,23 +16,51 @@ import com.example.dailylife.data.files.AttachmentStore
 import com.example.dailylife.data.local.Attachment
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
+
+private val previewDecoders=Semaphore(2)
+private val previewCache=object:android.util.LruCache<String,android.graphics.Bitmap>(16*1024*1024) {
+    override fun sizeOf(key:String,value:android.graphics.Bitmap)=value.byteCount
+}
+private data class PreviewState(val bitmap:ImageBitmap?=null,val loading:Boolean=true)
+
+/** Decode a bounded, correctly oriented preview; the internal original is never rewritten. */
+internal fun decodePhotoPreview(file:java.io.File,maxEdge:Int=720):android.graphics.Bitmap? {
+    require(maxEdge>0)
+    val bounds=BitmapFactory.Options().apply {inJustDecodeBounds=true}
+    BitmapFactory.decodeFile(file.absolutePath,bounds)
+    var sample=1
+    while(maxOf(bounds.outWidth,bounds.outHeight)/(sample*2)>=maxEdge) sample*=2
+    val decoded=BitmapFactory.decodeFile(file.absolutePath,BitmapFactory.Options().apply {inSampleSize=sample}) ?: return null
+    val scale=minOf(1f,maxEdge.toFloat()/maxOf(decoded.width,decoded.height))
+    val bitmap=if(scale==1f) decoded else android.graphics.Bitmap.createScaledBitmap(decoded,
+        (decoded.width*scale).toInt().coerceAtLeast(1),(decoded.height*scale).toInt().coerceAtLeast(1),true).also {if(it!==decoded) decoded.recycle()}
+    val orientation=runCatching {android.media.ExifInterface(file.absolutePath).getAttributeInt(android.media.ExifInterface.TAG_ORIENTATION,1)}.getOrDefault(1)
+    val matrix=android.graphics.Matrix().apply {when(orientation) {
+        2->setScale(-1f,1f);3->setRotate(180f);4->setScale(1f,-1f)
+        5->{setRotate(90f);postScale(-1f,1f)};6->setRotate(90f)
+        7->{setRotate(270f);postScale(-1f,1f)};8->setRotate(270f)
+    }}
+    return if(matrix.isIdentity) bitmap else android.graphics.Bitmap.createBitmap(bitmap,0,0,bitmap.width,bitmap.height,matrix,true).also {if(it!==bitmap) bitmap.recycle()}
+}
 
 @Composable fun AttachmentPreview(attachment: Attachment, store: AttachmentStore, modifier: Modifier = Modifier, contentScale: ContentScale = ContentScale.Crop) {
-    val bitmap by produceState<ImageBitmap?>(null, attachment.id) {
-        value = withContext(Dispatchers.IO) {
+    val preview by produceState(PreviewState(), attachment.id, attachment.sha256) {
+        value=PreviewState()
+        val bitmap = withContext(Dispatchers.IO) {previewDecoders.withPermit {
             runCatching {
-                val path = store.file(attachment).absolutePath
-                val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-                BitmapFactory.decodeFile(path, bounds)
-                var sample = 1
-                while (bounds.outWidth / sample > 1280 || bounds.outHeight / sample > 1280) sample *= 2
-                BitmapFactory.decodeFile(path, BitmapFactory.Options().apply { inSampleSize = sample })?.asImageBitmap()
+                val file=store.file(attachment)
+                val key=file.absolutePath+":"+attachment.sha256
+                previewCache.get(key)?.let {return@runCatching it.asImageBitmap()}
+                decodePhotoPreview(file)?.also {previewCache.put(key,it)}?.asImageBitmap()
             }.getOrNull()
-        }
+        }}
+        value=PreviewState(bitmap,false)
     }
-    if (bitmap != null) Image(bitmap!!, attachment.displayName, modifier.clip(RoundedCornerShape(16.dp)), contentScale = contentScale)
-    else Box(modifier.background(LocalGlass.current.selected, RoundedCornerShape(16.dp)).padding(12.dp)) {
-        Text(if (attachment.mime.startsWith("image/")) "图片预览暂不可用" else attachment.mime.substringAfterLast('/').uppercase().take(8))
+    if (preview.bitmap != null) Image(preview.bitmap!!, attachment.displayName, modifier.clip(RoundedCornerShape(12.dp)), contentScale = contentScale)
+    else Box(modifier.background(LocalGlass.current.selected, RoundedCornerShape(12.dp)).padding(12.dp)) {
+        Text(if(preview.loading) "载入图片…" else if (attachment.mime.startsWith("image/")) "图片预览暂不可用" else attachment.mime.substringAfterLast('/').uppercase().take(8),color=LocalGlass.current.muted,style=MaterialTheme.typography.bodySmall)
     }
 }
 @Composable fun AttachmentList(items: List<Attachment>, store: AttachmentStore, onOpen: (Attachment) -> Unit,

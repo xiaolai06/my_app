@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 108 108" role="img" aria-label="My Life">
+  <defs><linearGradient id="life" x1="10" y1="0" x2="95" y2="108" gradientUnits="userSpaceOnUse"><stop stop-color="#788CF5"/><stop offset=".55" stop-color="#6677DD"/><stop offset="1" stop-color="#9272D2"/></linearGradient></defs>
+  <rect width="108" height="108" rx="28" fill="url(#life)"/>
+  <path d="M30 70V40Q30 36 33 39L46 54Q49 57 52 54L65 39Q68 36 68 41V65Q68 70 73 70H80" fill="none" stroke="white" stroke-width="7" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

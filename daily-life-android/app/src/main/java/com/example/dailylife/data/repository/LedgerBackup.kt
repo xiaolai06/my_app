@@ -1,5 +1,6 @@
 package com.example.dailylife.data.repository
 import android.content.ContentValues
+import com.example.dailylife.data.files.RestoreWorkspaceOwner
 import android.content.Context
 import android.database.Cursor
 import android.database.sqlite.SQLiteDatabase
@@ -19,6 +20,8 @@ import java.util.zip.*
 data class LedgerRestore(val folder:File,val manifest:JSONObject,val count:Int,val files:Int)
 /** Ledger-scoped append backup. Fixed table/field allowlist; imported account entries are rebuilt from transaction facts. */
 class LedgerBackup(private val context:Context,private val repo:LedgerRepository) {
+    private val workspaces = RestoreWorkspaceOwner(context.cacheDir)
+    fun discardAll() = workspaces.close()
     private val tables=listOf("ledgers","ledger_categories","money_accounts","ledger_transactions","account_entries","ledger_drafts","transaction_templates","monthly_budgets","budget_alerts","reimbursement_claims","reimbursement_items","ledger_change_logs","ledger_import_batches","ledger_import_rows","tags","attachments","entity_tags","attachment_links")
     private val cap=256L*1024*1024
     private fun rows(data:JSONObject,t:String)=data.getJSONArray(t).let {a->(0 until a.length()).map {a.getJSONObject(it)}}
@@ -29,22 +32,22 @@ class LedgerBackup(private val context:Context,private val repo:LedgerRepository
     suspend fun export(uri:Uri)=withContext(Dispatchers.IO) {context.contentResolver.openOutputStream(uri,"wt")?.use {export(it)} ?:error("无法写入备份文件")}
     suspend fun export(out:OutputStream)=withContext(Dispatchers.IO) {repo.records.writes.withLock {
         val data=JSONObject();repo.db.withTransaction {tables.forEach {data.put(it,read(it))};val refs=rows(data,"attachment_links").map {it.getString("attachmentId")}.toSet();data.put("attachments",JSONArray(rows(data,"attachments").filter {it.getString("id") in refs}))}
-        validate(data);val manifest=JSONObject().put("format","daily-life-ledger").put("version",1).put("schema",3).put("data",data);val bytes=manifest.toString().toByteArray(Charsets.UTF_8);require(bytes.size<=10*1024*1024) {"账本清单超过 10 MB"}
+        validate(data);val manifest=JSONObject().put("format","daily-life-ledger").put("version",2).put("schema",3).put("data",data);val bytes=manifest.toString().toByteArray(Charsets.UTF_8);require(bytes.size<=10*1024*1024) {"账本清单超过 10 MB"}
         ZipOutputStream(out).use {zip->zip.putNextEntry(ZipEntry("manifest.json"));zip.write(bytes);zip.closeEntry();rows(data,"attachments").forEach {a->val file=File(repo.records.files.root,a.getString("id")+".bin");require(file.isFile&&file.length()==a.getLong("size")&&hash(file)==a.getString("sha256")) {"附件缺失或损坏，备份未完成"};zip.putNextEntry(ZipEntry("attachments/"+a.getString("id")+".bin"));file.inputStream().use {it.copyTo(zip)};zip.closeEntry()}}
     }}
     suspend fun prepare(uri:Uri)=withContext(Dispatchers.IO) {context.contentResolver.openInputStream(uri)?.use {prepare(it)} ?:error("无法读取账本备份")}
     suspend fun prepare(input:InputStream):LedgerRestore=withContext(Dispatchers.IO) {
-        val folder=File(context.cacheDir,"ledger-restore-"+newId()).apply {mkdirs()}
+        val folder=workspaces.create("ledger-restore-")
         try {val names=mutableSetOf<String>();var total=0L
             ZipInputStream(BufferedInputStream(input)).use {zip->while(true) {val e=zip.nextEntry ?:break;require(!e.isDirectory&&names.add(e.name)&&names.size<=1001) {"备份文件重复或数量过多"};require(e.name=="manifest.json"||e.name.matches(Regex("attachments/[0-9a-f-]{36}\\.bin"))) {"备份路径不安全"}
                 val f=File(folder,e.name);f.parentFile?.mkdirs();var size=0L;f.outputStream().use {out->val b=ByteArray(65536);while(true){val n=zip.read(b);if(n<0)break;size+=n;total+=n;require(total<=cap+10*1024*1024&&size<=if(e.name=="manifest.json")10*1024*1024 else 100L*1024*1024) {"备份解压容量超限"};out.write(b,0,n)}};zip.closeEntry()}}
-            val m=JSONObject(File(folder,"manifest.json").readText(Charsets.UTF_8));require(m.getString("format")=="daily-life-ledger"&&m.getInt("version")==1&&m.getInt("schema")==3) {"账本备份格式不支持"};val data=m.getJSONObject("data");validate(data)
+            val m=JSONObject(File(folder,"manifest.json").readText(Charsets.UTF_8));require(m.getString("format")=="daily-life-ledger"&&m.getInt("version") in 1..2&&m.getInt("schema")==3) {"账本备份格式不支持"};val data=m.getJSONObject("data");validate(data)
             val files=rows(data,"attachments");require(names==files.map {"attachments/"+it.getString("id")+".bin"}.toSet()+"manifest.json") {"附件清单不一致"}
             files.forEach {a->val f=File(folder,"attachments/"+a.getString("id")+".bin");require(f.length()==a.getLong("size")&&hash(f)==a.getString("sha256")) {"附件校验失败"}}
             LedgerRestore(folder,m,rows(data,"ledger_transactions").size,files.size)
-        } catch(e:Exception){folder.deleteRecursively();throw e}
+        } catch(e:Exception){workspaces.discard(folder);throw e}
     }
-    fun discard(preview:LedgerRestore){preview.folder.deleteRecursively()}
+    fun discard(preview:LedgerRestore){workspaces.discard(preview.folder)}
     private fun validate(data:JSONObject) {
         require(data.keys().asSequence().toSet()==tables.toSet()) {"备份表结构不兼容"};require(tables.sumOf {rows(data,it).size}<=50000&&rows(data,"ledger_transactions").size<=10000) {"账本备份上限一万笔 / 五万明细"}
         val files=rows(data,"attachments");require(files.size<=1000&&files.sumOf {it.getLong("size")}<=cap)
@@ -66,7 +69,14 @@ class LedgerBackup(private val context:Context,private val repo:LedgerRepository
         val budgets=rows(data,"monthly_budgets").map {it.getString("id")}.toSet();rows(data,"monthly_budgets").forEach {b->YearMonth.parse(b.getString("month"));require(b.getString("ledgerId") in ledgerIds&&b.getLong("limitMinor") in 1..99_999_999_999L);if(!b.isNull("categoryId"))require(b.getString("categoryId") in categoryIds)}
         rows(data,"budget_alerts").forEach {require(it.getString("budgetId") in budgets&&it.getInt("threshold") in setOf(80,100))}
         val batches=rows(data,"ledger_import_batches").map {it.getString("id")}.toSet();rows(data,"ledger_import_batches").forEach {b->require(b.getString("ledgerId") in ledgerIds&&(b.isNull("accountId")||b.getString("accountId") in accountIds));JSONObject(b.getString("mapping"))}
-        rows(data,"ledger_import_rows").forEach {r->require(r.getString("batchId") in batches&&r.getInt("rowNumber")>=2&&r.getString("result") in setOf("pending","error","skipped","imported"));if(!r.isNull("transactionId"))require(r.getString("transactionId") in txIds);LedgerForm.parse(r.getString("parsedValues"));JSONArray(r.getString("rawValues"))}
+        rows(data,"ledger_import_rows").forEach {r->
+            val result=r.getString("result")
+            require(r.getString("batchId") in batches&&r.getInt("rowNumber")>=2&&result in setOf("pending","error","skipped","imported","deleted"))
+            if(result=="deleted") require(r.isNull("transactionId")) {"已删除的导入记录不能保留账目引用"}
+            if(result=="imported") require(!r.isNull("transactionId")) {"已导入记录缺少对应账目"}
+            if(!r.isNull("transactionId"))require(r.getString("transactionId") in txIds)
+            LedgerForm.parse(r.getString("parsedValues"));JSONArray(r.getString("rawValues"))
+        }
         rows(data,"account_entries").forEach {require(it.getString("transactionId") in txIds&&it.getString("accountId") in accountIds)}
         rows(data,"reimbursement_items").forEach {require(it.getString("claimId") in claimIds&&it.getString("expenseId") in txIds&&it.getLong("requestedMinor")>0)}
         rows(data,"ledger_drafts").forEach {val f=LedgerForm.parse(it.getString("payload"));require(f.id==it.getString("id")&&f.revision>=0&&f.kind in setOf("expense","income","transfer","refund","reimbursement","claim")) {"草稿身份或类型与内容不一致"}}
@@ -112,7 +122,7 @@ class LedgerBackup(private val context:Context,private val repo:LedgerRepository
                 rows(data,"attachment_links").filter(::keepRef).forEach {insert("attachment_links",it)}
                 verifyAndRebuild()
             }
-        } catch(e:Exception){published.forEach {it.delete()};throw e}
+        } catch(e:Exception){repo.records.cleanupUncommittedOriginals(published);throw e}
     }}
     private suspend fun verifyAndRebuild() {
         val s=repo.load();s.transactions.forEach {t->require(s.ledgers.any {it.id==t.ledgerId}) {"交易账本缺失"};listOfNotNull(t.accountId,t.toAccountId).forEach {a->require(s.accounts.any {it.id==a&&t.occurredOn>=it.openingAsOfDate}) {"账户或期初基准关系错误"}}

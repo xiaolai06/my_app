@@ -1,5 +1,6 @@
 package com.example.dailylife.data.repository
 
+import com.example.dailylife.data.files.RestoreWorkspaceOwner
 import android.content.Context
 import android.net.Uri
 import android.database.Cursor
@@ -20,6 +21,8 @@ import java.util.zip.*
 data class PlanRestore(val folder:File,val manifest:JSONObject,val count:Int,val files:Int)
 /** Scoped append restore. No SQL or file path from the archive is executed. Existing facts are never replaced. */
 class PlansBackup(private val context:Context,private val repo:PlansRepository) {
+    private val workspaces = RestoreWorkspaceOwner(context.cacheDir)
+    fun discardAll() = workspaces.close()
     private val tables=listOf("task_groups","tasks","subtasks","events","repeat_rules","occurrences","habits","habit_rules","habit_logs",
         "habit_pauses","focus_sessions","focus_segments","goals","goal_progress","goal_links","milestones","plan_drafts","tags","attachments","entity_tags","attachment_links")
     private val rootTypes=mapOf("task" to "tasks","event" to "events","habit" to "habits","focus" to "focus_sessions","goal" to "goals","plan_draft" to "plan_drafts")
@@ -67,7 +70,7 @@ class PlansBackup(private val context:Context,private val repo:PlansRepository) 
         context.contentResolver.openInputStream(uri)?.use {prepare(it)} ?: error("无法读取备份")
     }
     suspend fun prepare(input:InputStream):PlanRestore=withContext(Dispatchers.IO) {
-        val folder=File(context.cacheDir,"plan-restore-"+newId()).apply {mkdirs()}
+        val folder=workspaces.create("plan-restore-")
         try {
             val names=mutableSetOf<String>();var total=0L
             ZipInputStream(BufferedInputStream(input)).use {zip->
@@ -96,7 +99,7 @@ class PlansBackup(private val context:Context,private val repo:PlansRepository) 
                 require(f.length()==a.getLong("size") && hash(f)==a.getString("sha256")) {"附件校验失败"}
             }
             PlanRestore(folder,manifest,roots.sumOf {rows(data,it).size},files.size)
-        } catch(e:Exception) {folder.deleteRecursively();throw e}
+        } catch(e:Exception) {workspaces.discard(folder);throw e}
     }
     private fun validate(data:JSONObject) {
         require(data.keys().asSequence().toSet()==tables.toSet()) {"备份表结构不完整"}
@@ -201,7 +204,7 @@ class PlansBackup(private val context:Context,private val repo:PlansRepository) 
                 sql.execSQL("INSERT INTO "+table+" ("+columns.joinToString(",")+") VALUES ("+columns.joinToString(",") {"?"}+")",args)
                 if(table in roots) inserted++
             }}
-        };inserted} catch(e:Exception) {published.forEach {it.delete()};throw e}
+        };inserted} catch(e:Exception) {repo.records.cleanupUncommittedOriginals(published);throw e}
     }}
-    fun discard(preview:PlanRestore) {preview.folder.deleteRecursively()}
+    fun discard(preview:PlanRestore) {workspaces.discard(preview.folder)}
 }

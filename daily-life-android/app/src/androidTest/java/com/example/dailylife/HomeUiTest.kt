@@ -24,7 +24,7 @@ class HomeUiTest {
         try {
             runBlocking {app.preferences.set(Appearance(theme="light",reducedMotion=true));app.preferences.setDashboard(com.example.dailylife.data.repository.DashboardPreferences());app.plans.initialize();app.plans.prepareDraft(task);app.plans.save(task);app.tools.prepare(anniversary);app.tools.save(anniversary)}
             compose.waitUntil(20000) {compose.onAllNodesWithTag("homeContent").fetchSemanticsNodes().isNotEmpty()}
-            compose.onAllNodesWithText("今天",substring=false).assertCountEquals(1)
+            compose.onNodeWithTag("root:今天").assertIsSelected()
             compose.onNodeWithTag("completeTask:"+task.id).performScrollTo().performClick()
             compose.waitUntil(10000) {runBlocking {app.plans.dao.tasks().first {it.id==task.id}.status=="done"}}
             ready()
@@ -36,7 +36,7 @@ class HomeUiTest {
             compose.onNodeWithTag("root:今天").assertIsSelected()
             compose.onNodeWithTag("homeContent").performScrollToIndex(0)
             screenshot("home-light.png")
-            compose.onNodeWithTag("editHome").performClick()
+            compose.onNodeWithTag("editHome").performScrollTo().performClick()
             compose.onNodeWithTag("homeCard:budget").performScrollTo().performClick()
             compose.onNodeWithText("保存首页设置").performScrollTo().performClick()
             compose.waitUntil(10000) {runBlocking {"budget" in app.preferences.dashboard.first().hiddenCards}}
@@ -44,10 +44,6 @@ class HomeUiTest {
             compose.waitUntil(15000) {compose.onAllNodesWithTag("homeContent").fetchSemanticsNodes().isNotEmpty()}
             compose.onAllNodesWithText("本月账本",substring=false).assertCountEquals(0)
             Assert.assertEquals(1,runBlocking {app.plans.dao.tasks().count {it.id==task.id}})
-            compose.onNodeWithTag("globalSearch").performClick()
-            compose.onNodeWithText("标题、正文、商户或位置").performTextInput("今天，从一件")
-            compose.onNodeWithText("今天，从一件小事开始").assertExists()
-            compose.onNodeWithText("关闭搜索").performScrollTo().performClick()
             runBlocking {app.preferences.set(Appearance(theme="dark",reducedMotion=true))}
             screenshot("home-dark.png")
         } finally {runBlocking {

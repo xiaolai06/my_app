@@ -35,7 +35,7 @@ class LedgerUiTest {
             compose.onNodeWithTag("addLedgerTransaction").performClick()
             compose.waitUntil(15000) {compose.onAllNodesWithTag("ledgerAmount").fetchSemanticsNodes().isNotEmpty()};ready()
             compose.onNodeWithTag("ledgerAmount").performTextReplacement("12.34")
-            compose.onNodeWithTag("ledgerSubject").performTextReplacement("认真记下每一笔")
+            compose.onNodeWithTag("ledgerSubject").performScrollTo().performTextReplacement("认真记下每一笔")
             screenshot("ledger-editor-light.png")
             compose.onNodeWithTag("saveLedgerTransaction").performClick()
             compose.waitUntil(15000) {compose.onAllNodesWithTag("backLedgerDetail").fetchSemanticsNodes().isNotEmpty()};ready()
@@ -56,22 +56,17 @@ class LedgerUiTest {
             compose.onNodeWithTag("ledgerOverview").performScrollToNode(hasText("认真记下每一笔"))
             compose.onNodeWithText("认真记下每一笔").assertIsDisplayed()
             tab("stats");screenshot("ledger-statistics-light.png")
-            tab("budgets");compose.onNodeWithText("设置预算",substring=false).performClick()
+            tab("accounts")
+            compose.onNodeWithTag("ledgerSettings").performScrollTo().performClick()
+            compose.onNodeWithText("预算",substring=false).performScrollTo().performClick();compose.onNodeWithText("设置预算",substring=false).performClick()
             compose.onNodeWithText("预算额度",substring=false).performTextInput("100.00")
-            compose.onNodeWithText("保存预算",substring=false).performScrollTo().performClick()
+            compose.onNodeWithText("保存预算",substring=false).assertIsDisplayed().performClick()
             compose.waitUntil(15000) {runBlocking {repo.load().budgets.any {it.ledgerId==ledgerId&&it.limitMinor==10000L}}};ready()
             screenshot("ledger-budgets-light.png")
-            tab("stats");compose.onNodeWithText("现金流",substring=false).performScrollTo().performClick()
-            compose.waitUntil(15000) {compose.onAllNodesWithTag("ledgerCashFlow").fetchSemanticsNodes().isNotEmpty()}
-            val customFrom=YearMonth.now().minusMonths(1).atDay(15).toString()
-            reportDate("开始日期",customFrom)
-            compose.onNodeWithText(customFrom+" ▾").assertIsDisplayed()
-            compose.onNodeWithTag("ledgerCashFlow").performScrollToNode(hasText("账户流入"))
-            compose.onNodeWithText("账户流入").assertIsDisplayed()
-            compose.onNodeWithTag("ledgerCashFlow").performScrollToIndex(0)
-            screenshot("ledger-cashflow-light.png")
-            compose.onNodeWithText("返回",substring=false).performClick()
+            compose.onNodeWithTag("backLedgerPage").performClick()
+            compose.onNodeWithTag("backLedgerPage").performClick()
             compose.waitUntil(15000) {compose.onAllNodesWithTag("ledgerTab:accounts").fetchSemanticsNodes().isNotEmpty()}
+            val customFrom=YearMonth.now().minusMonths(1).atDay(15).toString()
             runBlocking {
                 repo.saveAccount(accountName,"cash","100.50",YearMonth.now().minusMonths(1).atDay(1).toString())
                 accountId=repo.load().accounts.single {it.name==accountName}.id
@@ -88,17 +83,18 @@ class LedgerUiTest {
             compose.waitUntil(15000) {compose.onAllNodesWithTag("backLedgerDetail").fetchSemanticsNodes().isNotEmpty()}
             compose.onNodeWithTag("backLedgerDetail").performClick()
             compose.waitUntil(15000) {compose.onAllNodesWithTag("ledgerAccountFlow").fetchSemanticsNodes().isNotEmpty()}
-            compose.onNodeWithTag("ledgerAccountFlow").performScrollToIndex(0)
-            compose.onNodeWithText(customFrom+" ▾").assertIsDisplayed()
+            compose.onNodeWithTag("ledgerAccountFlow").performScrollToNode(hasText(customFrom,substring=false))
+            compose.onNodeWithText(customFrom,substring=false).assertIsDisplayed()
             screenshot("ledger-account-flow-light.png")
-            compose.onNodeWithText("返回",substring=false).performClick()
+            compose.onNodeWithTag("backLedgerPage").performClick()
             compose.waitUntil(15000) {compose.onAllNodesWithTag("ledgerTab:overview").fetchSemanticsNodes().isNotEmpty()}
-            runBlocking {app.preferences.set(Appearance(theme="dark",reducedMotion=true))}
-            tab("overview");compose.onNodeWithTag("hideLedgerAmounts").performClick()
-            compose.waitUntil(10000) {runBlocking {app.preferences.dashboard.first().hideAmounts}}
+            runBlocking {app.preferences.set(Appearance(theme="dark",reducedMotion=true));app.preferences.setDashboard(dashboard.copy(hideAmounts=true))}
+            tab("overview")
+            compose.onNodeWithTag("hideLedgerAmounts").assertDoesNotExist()
+            compose.onNodeWithTag("ledgerPeriod:month").assertIsSelected()
             compose.onNodeWithTag("ledgerOverview").performScrollToIndex(0)
-            compose.onAllNodesWithText("••••",substring=true).onFirst().assertIsDisplayed()
-            screenshot("ledger-overview-dark-hidden.png")
+            compose.onNodeWithTag("ledgerMonthExpense").assertTextEquals("¥ 15.68")
+            screenshot("ledger-overview-dark.png")
         } catch(e:Throwable) {runCatching {screenshot("ledger-ui-failure.png",false)};throw e}
         finally {runBlocking {
             val id=ledgerId
@@ -117,11 +113,18 @@ class LedgerUiTest {
         compose.waitForIdle()
         if(compose.onAllNodesWithTag("dismissMessage").fetchSemanticsNodes().isNotEmpty()) {compose.onNodeWithTag("dismissMessage").performClick();compose.waitForIdle()}
     }
-    private fun tab(value:String) {compose.onNodeWithTag("ledgerTab:"+value).performScrollTo().performClick();compose.waitForIdle()}
+    private fun tab(value:String) {
+        val node=compose.onNodeWithTag("ledgerTab:"+value)
+        if(compose.activity.resources.configuration.fontScale>1.3f) node.performScrollTo()
+        node.performClick();compose.waitForIdle()
+    }
     private fun reportDate(label:String,value:String) {
         compose.onNodeWithText(label,substring=false).performScrollTo().performClick()
-        compose.onNodeWithText("YYYY-MM-DD",substring=false).performScrollTo().performTextReplacement(value)
-        compose.onNodeWithText("确定",substring=false).performScrollTo().performClick()
+        compose.onNodeWithTag("calendarMode:list").performScrollTo().performClick().assertIsSelected()
+        compose.onNodeWithTag("calendarPrevious").performClick()
+        compose.onNodeWithTag("calendarDays").performScrollToNode(hasTestTag("calendarDay:"+value))
+        compose.onNodeWithTag("calendarDay:"+value).performClick()
+        compose.onNodeWithTag("ledgerCalendarConfirm").assertIsDisplayed().performClick()
         compose.waitForIdle()
     }
     private fun screenshot(name:String,requireFocus:Boolean=true) {

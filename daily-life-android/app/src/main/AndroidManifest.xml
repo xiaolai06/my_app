@@ -1,8 +1,10 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/>
-    <application android:name=".DailyLifeApplication" android:label="@string/app_name" android:icon="@drawable/ic_daily"
-        android:theme="@style/Theme.DailyLife" android:allowBackup="false" android:dataExtractionRules="@xml/data_extraction_rules"
+    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM"/>
+    <uses-permission android:name="android.permission.INTERNET"/>
+    <application android:name=".DailyLifeApplication" android:label="@string/app_name" android:icon="@mipmap/ic_launcher" android:roundIcon="@mipmap/ic_launcher"
+        android:theme="@style/Theme.DailyLife" android:allowBackup="false" android:fullBackupContent="false" android:dataExtractionRules="@xml/data_extraction_rules"
         android:supportsRtl="true">
         <receiver android:name=".data.repository.PlanAlarmReceiver" android:exported="false">
             <intent-filter>
@@ -10,6 +12,7 @@
                 <action android:name="android.intent.action.TIME_SET"/>
                 <action android:name="android.intent.action.TIMEZONE_CHANGED"/>
                 <action android:name="android.intent.action.MY_PACKAGE_REPLACED"/>
+                <action android:name="android.app.action.SCHEDULE_EXACT_ALARM_PERMISSION_STATE_CHANGED"/>
             </intent-filter>
         </receiver>
         <activity android:name=".MainActivity" android:exported="true"

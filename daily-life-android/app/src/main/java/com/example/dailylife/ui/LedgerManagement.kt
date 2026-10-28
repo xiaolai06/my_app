@@ -8,6 +8,7 @@ import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.*
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.platform.testTag
 import com.example.dailylife.core.LedgerRules
 import com.example.dailylife.data.local.*
 import com.example.dailylife.feature.ledger.*
@@ -15,18 +16,42 @@ import java.time.*
 
 @Composable internal fun LedgerAccounts(ui:LedgerUi,vm:LedgerViewModel) {
     var edit by remember {mutableStateOf<MoneyAccount?>(null)};var add by remember {mutableStateOf(false)};var calibrate by remember {mutableStateOf<MoneyAccount?>(null)}
-    LazyColumn(Modifier.fillMaxSize(),contentPadding=PaddingValues(18.dp,4.dp,18.dp,32.dp),verticalArrangement=Arrangement.spacedBy(14.dp)) {
-        item {Row(Modifier.fillMaxWidth(),verticalAlignment=Alignment.CenterVertically) {Text("全部账本共用账户",Modifier.weight(1f),color=LocalGlass.current.muted);TextButton(onClick={add=true}) {Text("新增账户")}}}
-        if(ui.data.accounts.isEmpty()) item {LedgerEmpty("账户可以稍后添加","未指定账户的普通收支也能记录，并参与消费统计。")}
-        items(ui.data.accounts,key={it.id}) {a->GlassPanel(Modifier.fillMaxWidth().clickable {vm.openAccount(a.id)}) {Column(Modifier.padding(18.dp),verticalArrangement=Arrangement.spacedBy(9.dp)) {
-            Text(a.name+(if(a.archivedAt!=null) " · 已归档" else ""),style=MaterialTheme.typography.titleMedium)
-            Text(ledgerMoney(ui,ui.data.balance(a.id)),style=MaterialTheme.typography.headlineSmall,color=LocalGlass.current.accent)
-            Text("期初 "+ledgerMoney(ui,a.openingBalanceMinor)+" · "+a.openingAsOfDate+" 起",color=LocalGlass.current.muted,style=MaterialTheme.typography.bodySmall)
-            TextButton(onClick={vm.openAccount(a.id)}) {Text("账户流水与期间余额 ›")}
-            if(a.note.isNotBlank()) Text(a.note,color=LocalGlass.current.muted)
-            Row {TextButton(onClick={edit=a}) {Text("管理账户")};TextButton(enabled=a.archivedAt==null,onClick={calibrate=a}) {Text("校准余额")}}
+    val active=ui.data.accounts.filter {it.archivedAt==null}
+    var showArchived by rememberSaveable {mutableStateOf(false)}
+    val visible=if(showArchived) ui.data.accounts else active
+    LazyColumn(Modifier.fillMaxSize().testTag("ledgerAccounts"),contentPadding=PaddingValues(18.dp,4.dp,18.dp,32.dp),verticalArrangement=Arrangement.spacedBy(14.dp)) {
+        item {GlassPanel(Modifier.fillMaxWidth(),selected=true) {Column(Modifier.padding(22.dp),verticalArrangement=Arrangement.spacedBy(12.dp)) {
+            Text("账户余额合计",color=LocalGlass.current.muted)
+            Text(ledgerMoney(ui,active.sumOf {ui.data.balance(it.id)}),style=MaterialTheme.typography.headlineLarge)
+            Text("${active.size} 个使用中账户 · 汇总所有账本",style=MaterialTheme.typography.bodySmall,color=LocalGlass.current.muted)
         }}}
-        item {Text("余额汇总所有账本的有效分录。转账属于账户资金移动；校准会保留调整前后事实。",color=LocalGlass.current.muted,style=MaterialTheme.typography.bodySmall)}
+        item {GlassButton(onClick={add=true},modifier=Modifier.fillMaxWidth().testTag("addLedgerAccount")) {Text("＋ 添加银行卡或账户")}}
+        if(ui.data.accounts.any {it.archivedAt!=null}) item {TextButton(onClick={showArchived=!showArchived}) {Text(if(showArchived) "收起已归档账户" else "查看已归档账户")}}
+        if(visible.isEmpty()) item {LedgerEmpty("按需要管理账户","可以添加银行卡、现金或支付余额；不选账户也能记收支。")}
+        items(visible,key={it.id}) {a->GlassPanel(Modifier.fillMaxWidth().clickable(onClickLabel="查看账户流水") {vm.openAccount(a.id)}) {
+            Column(Modifier.padding(20.dp),verticalArrangement=Arrangement.spacedBy(12.dp)) {
+                Row(verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(12.dp)) {
+                    Surface(shape=androidx.compose.foundation.shape.RoundedCornerShape(14.dp),color=LocalGlass.current.selected) {
+                        Box(Modifier.size(44.dp),contentAlignment=Alignment.Center) {Text(when(a.accountType) {"bank"->"银";"cash"->"现";"payment"->"付";else->"账"},color=LocalGlass.current.accent)}
+                    }
+                    Column(Modifier.weight(1f)) {
+                        Text(a.name,style=MaterialTheme.typography.titleMedium)
+                        Text(when(a.accountType) {"bank"->"银行卡";"cash"->"现金";"payment"->"支付余额";else->"其他账户"}+
+                            (if(a.tail.isNotBlank()) " · 尾号 "+a.tail.takeLast(4) else "")+(if(a.archivedAt!=null) " · 已归档" else ""),color=LocalGlass.current.muted,style=MaterialTheme.typography.bodySmall)
+                    }
+                }
+                Text(ledgerMoney(ui,ui.data.balance(a.id)),style=MaterialTheme.typography.headlineSmall,color=LocalGlass.current.accent)
+                Text("查看收支记录 ›",color=LocalGlass.current.muted,style=MaterialTheme.typography.bodySmall)
+                if(a.note.isNotBlank()) Text(a.note,color=LocalGlass.current.muted,style=MaterialTheme.typography.bodySmall)
+                if(androidx.compose.ui.platform.LocalDensity.current.fontScale>1.3f) Column {
+                    TextButton(onClick={edit=a}) {Text("账户设置")};TextButton(enabled=a.archivedAt==null,onClick={calibrate=a}) {Text("校准余额")}
+                } else Row {
+                    TextButton(onClick={edit=a}) {Text("账户设置")};TextButton(enabled=a.archivedAt==null,onClick={calibrate=a}) {Text("校准余额")}
+                }
+            }
+        }}
+        item {Text("余额按记账记录计算；未指定账户的收支不改变余额，已归档账户不计入上方合计。",color=LocalGlass.current.muted,style=MaterialTheme.typography.bodySmall)}
+        item {TextButton(onClick={vm.page("manage")},modifier=Modifier.fillMaxWidth().testTag("ledgerSettings")) {Text("账本设置")}}
     }
     if(add||edit!=null) LedgerAccountEditor(ui,vm,edit,{add=false;edit=null})
     calibrate?.let {a->
@@ -34,22 +59,25 @@ import java.time.*
         GlassSheet("校准 · "+a.name,{calibrate=null}) {
             Text("当前记账余额 "+ledgerMoney(ui,ui.data.balance(a.id))+"。校准生成独立调整，不作为普通收入或支出。",color=LocalGlass.current.muted)
             LedgerField(target,{target=it},"该日目标余额",numeric=true);LedgerSelectRow("校准日期",date) {calendar=true};LedgerField(reason,{reason=it},"核对原因（必填）",single=false)
-            Button(enabled=!ui.busy,onClick={vm.run("余额已校准",onSuccess={calibrate=null}) {calibrate(a.id,date,target,reason)}},modifier=Modifier.fillMaxWidth()) {Text("确认校准")}
+            GlassButton(enabled=!ui.busy,onClick={vm.run("余额已校准",onSuccess={calibrate=null}) {calibrate(a.id,date,target,reason)}},modifier=Modifier.fillMaxWidth()) {Text("确认校准")}
         }
-        if(calendar) CalendarDialog(date,{calendar=false}) {date=it;calendar=false}
+        if(calendar) LedgerCalendarPicker(date,{calendar=false}) {date=it;calendar=false}
     }
 }
 @Composable private fun LedgerAccountEditor(ui:LedgerUi,vm:LedgerViewModel,a:MoneyAccount?,dismiss:()->Unit) {
     var name by remember(a?.id) {mutableStateOf(a?.name.orEmpty())};var type by remember(a?.id) {mutableStateOf(a?.accountType ?: "cash")};var opening by remember(a?.id) {mutableStateOf(LedgerRules.display(a?.openingBalanceMinor ?: 0))};var date by remember(a?.id) {mutableStateOf(a?.openingAsOfDate ?: LocalDate.now().toString())}
     var note by remember(a?.id) {mutableStateOf(a?.note.orEmpty())};var tail by remember(a?.id) {mutableStateOf(a?.tail.orEmpty())};var confirm by remember {mutableStateOf(false)};var archived by remember(a?.id) {mutableStateOf(a?.archivedAt!=null)};var calendar by remember {mutableStateOf(false)}
-    GlassSheet(if(a==null) "新增账户" else "管理账户",dismiss) {
+    GlassSheet(if(a==null) "新增账户" else "管理账户",dismiss,dismissEnabled=!ui.busy,footer={
+        PickerActions({if(!ui.busy) dismiss()},{vm.run("账户已保存",onSuccess=dismiss) {saveAccount(name,type,opening,date,note,tail,a?.id,confirm,archived)}},"保存账户",!ui.busy)
+    }) {
         LedgerField(name,{name=it},"账户名称");FlowChoices(listOf("cash" to "现金","bank" to "银行卡","payment" to "支付余额","other" to "其他"),type) {type=it}
         LedgerField(opening,{opening=it},"期初余额（允许负数）",numeric=true);LedgerSelectRow("期初基准日期",date) {calendar=true}
-        LedgerField(tail,{tail=it},"标识尾号（选填）");LedgerField(note,{note=it},"备注",single=false)
-        if(a!=null) {Row(verticalAlignment=Alignment.CenterVertically) {Checkbox(archived,{archived=it});Text("归档账户，保留历史")};Row(verticalAlignment=Alignment.CenterVertically) {Checkbox(confirm,{confirm=it});Text("我已核对修改期初对历史余额的影响")}}
-        Button(enabled=!ui.busy,onClick={vm.run("账户已保存",onSuccess=dismiss) {saveAccount(name,type,opening,date,note,tail,a?.id,confirm,archived)}},modifier=Modifier.fillMaxWidth()) {Text("保存账户")}
+        GlassFormSection("补充信息","account-extra",true,tail.isNotBlank() || note.isNotBlank(),"尾号与备注，可选") {
+            LedgerField(tail,{tail=it},"标识尾号（选填）");LedgerField(note,{note=it},"备注",single=false)
+        }
+        if(a!=null) {Row(verticalAlignment=Alignment.CenterVertically) {GlassCheckbox(archived,{archived=it});Text("归档账户，保留历史")};Row(verticalAlignment=Alignment.CenterVertically) {GlassCheckbox(confirm,{confirm=it});Text("我已核对修改期初对历史余额的影响")}}
     }
-    if(calendar) CalendarDialog(date,{calendar=false}) {date=it;calendar=false}
+    if(calendar) LedgerCalendarPicker(date,{calendar=false}) {date=it;calendar=false}
 }
 
 @Composable internal fun LedgerBudgets(ui:LedgerUi,vm:LedgerViewModel) {
@@ -75,64 +103,69 @@ import java.time.*
     if(add||edit!=null) {
         val b=edit;var amount by remember(b?.id) {mutableStateOf(b?.let {LedgerRules.display(it.limitMinor)}.orEmpty())};var category by remember(b?.id) {mutableStateOf(b?.categoryId.orEmpty())};var alerts by remember(b?.id) {mutableStateOf(b?.alertsEnabled ?: true)};var picker by remember {mutableStateOf(false)}
         fun close(){add=false;edit=null}
-        GlassSheet("设置月预算",{close()}) {
+        GlassSheet("设置月预算",{close()},dismissEnabled=!ui.busy,footer={
+            PickerActions({if(!ui.busy) close()},{vm.run("预算已保存",onSuccess={close()}) {saveBudget(ui.ledgerId ?: error("请先选择账本"),ui.month,category.ifBlank {null},amount,alerts,b?.id)}},"保存预算",!ui.busy)
+        }) {
             Text(ui.data.ledgerName(ui.ledgerId)+" · "+ui.month,color=LocalGlass.current.muted)
             LedgerSelectRow("范围",if(category.isBlank()) "月总预算" else ui.data.categoryName(category)) {picker=true}
             LedgerField(amount,{amount=it},"预算额度",numeric=true)
-            Row(verticalAlignment=Alignment.CenterVertically) {Checkbox(alerts,{alerts=it});Text("记录 80% 与 100% 首次跨越提醒")}
-            Button(enabled=!ui.busy,onClick={vm.run("预算已保存",onSuccess={close()}) {saveBudget(ui.ledgerId ?: error("请先选择账本"),ui.month,category.ifBlank {null},amount,alerts,b?.id)}},modifier=Modifier.fillMaxWidth()) {Text("保存预算")}
+            Row(verticalAlignment=Alignment.CenterVertically) {GlassCheckbox(alerts,{alerts=it});Text("记录 80% 与 100% 首次跨越提醒")}
         }
         if(picker) LedgerPicker("预算范围",listOf("" to "月总预算")+ui.data.categories.filter {it.active&&it.direction=="expense"&&ui.data.categories.none {c->c.parentId==it.id}}.map {it.id to ui.data.categoryName(it.id)},category,{picker=false}) {category=it;picker=false}
     }
     remove?.let {b->ConfirmDialog("删除预算","只删除该额度与提醒记录，不删除账目。",{remove=null},{vm.run("预算已删除") {removeBudget(b.id)}})}
 }
 
-@Composable internal fun LedgerManage(ui:LedgerUi,vm:LedgerViewModel,exportCsv:()->Unit,importCsv:()->Unit,exportBackup:()->Unit,restoreBackup:()->Unit) {
+@Composable internal fun LedgerManage(ui:LedgerUi,vm:LedgerViewModel,importCsv:()->Unit,restoreBackup:()->Unit) {
     var manager by remember {mutableStateOf<String?>(null)}
     LazyColumn(Modifier.fillMaxSize(),contentPadding=PaddingValues(18.dp,4.dp,18.dp,32.dp),verticalArrangement=Arrangement.spacedBy(14.dp)) {
         item {GlassPanel(Modifier.fillMaxWidth()) {Column(Modifier.padding(10.dp)) {
+            LedgerSelectRow("当前账本",ui.data.ledgerName(ui.ledgerId)) {manager="select"}
             LedgerSelectRow("账本管理",ui.data.ledgers.size.toString()+" 个账本") {manager="ledgers"}
             LedgerSelectRow("收支分类","全账本共用") {manager="categories"}
             LedgerSelectRow("常用模板",ui.data.templates.size.toString()+" 个模板") {manager="templates"}
             LedgerSelectRow("报销申请","费用分配与分次到账") {vm.page("claims")}
+            LedgerSelectRow("预算","按需设置月度额度") {vm.page("budgets")}
         }}}
         item {GlassPanel(Modifier.fillMaxWidth()) {Column(Modifier.padding(10.dp)) {
-            LedgerSelectRow("记账草稿",ui.data.drafts.size.toString()+" 条") {vm.page("drafts")}
             LedgerSelectRow("账目回收站",ui.data.transactions.count {it.deletedAt!=null}.toString()+" 条") {vm.page("trash")}
             LedgerSelectRow("财务变更记录","校准、更正与删除") {vm.page("changes")}
         }}}
         item {GlassPanel(Modifier.fillMaxWidth()) {Column(Modifier.padding(10.dp)) {
             LedgerSelectRow("导入 CSV 账单","匹配字段、预览后确认") {importCsv()}
             LedgerSelectRow("导入批次","查看结果与撤销") {vm.page("imports")}
-            LedgerSelectRow("导出 CSV 明细","自选日期、类型与字段") {exportCsv()}
-            LedgerSelectRow("备份账本与附件","本地完整财务备份") {exportBackup()}
             LedgerSelectRow("恢复账本备份","校验并预览后追加") {restoreBackup()}
         }}}
     }
     when(manager) {"ledgers"->LedgerBookManager(ui,vm) {manager=null};"categories"->LedgerCategoryManager(ui,vm) {manager=null};"templates"->LedgerTemplateManager(ui,vm) {manager=null}}
+    if(manager=="select") LedgerPicker("选择账本",ui.data.ledgers.filter {it.archivedAt==null||it.id==ui.ledgerId}.map {it.id to it.name},ui.ledgerId,{manager=null}) {vm.selectLedger(it);manager=null}
 }
 @Composable private fun LedgerBookManager(ui:LedgerUi,vm:LedgerViewModel,dismiss:()->Unit) {
     var id by remember {mutableStateOf<String?>(null)};var name by remember {mutableStateOf("")};var default by remember {mutableStateOf(false)};var archive by remember {mutableStateOf(false)}
     GlassSheet("账本管理",dismiss) {
-        ui.data.ledgers.forEach {l->TextButton(onClick={id=l.id;name=l.name;default=l.isDefault;archive=l.archivedAt!=null}) {Text(l.name+(if(l.isDefault) " · 默认" else "")+(if(l.archivedAt!=null) " · 已归档" else ""))}}
+        GlassSelectField("管理账本",listOf("" to "新建账本")+ui.data.ledgers.map {it.id to (it.name+(if(it.isDefault) " · 默认" else "")+(if(it.archivedAt!=null) " · 已归档" else ""))},id.orEmpty()) {key->
+            val book=ui.data.ledgers.find {it.id==key};id=book?.id;name=book?.name.orEmpty();default=book?.isDefault ?: false;archive=book?.archivedAt!=null
+        }
         HorizontalDivider();Text(if(id==null) "新增账本" else "编辑账本",style=MaterialTheme.typography.titleMedium)
         LedgerField(name,{name=it},"账本名称")
-        Row(verticalAlignment=Alignment.CenterVertically) {Checkbox(default,{default=it});Text("设为默认账本")}
-        if(id!=null) Row(verticalAlignment=Alignment.CenterVertically) {Checkbox(archive,{archive=it});Text("归档，保留所有历史")}
-        Button(enabled=!ui.busy,onClick={vm.run("账本已保存",onSuccess={id=null;name="";default=false;archive=false}) {saveLedger(name,id,default,archive)}},modifier=Modifier.fillMaxWidth()) {Text("保存账本")}
+        Row(verticalAlignment=Alignment.CenterVertically) {GlassCheckbox(default,{default=it});Text("设为默认账本")}
+        if(id!=null) Row(verticalAlignment=Alignment.CenterVertically) {GlassCheckbox(archive,{archive=it});Text("归档，保留所有历史")}
+        GlassButton(enabled=!ui.busy,onClick={vm.run("账本已保存",onSuccess={id=null;name="";default=false;archive=false}) {saveLedger(name,id,default,archive)}},modifier=Modifier.fillMaxWidth()) {Text("保存账本")}
         if(id!=null) TextButton(onClick={id=null;name="";default=false;archive=false}) {Text("改为新增")}
     }
 }
 @Composable private fun LedgerCategoryManager(ui:LedgerUi,vm:LedgerViewModel,dismiss:()->Unit) {
     var id by remember {mutableStateOf<String?>(null)};var name by remember {mutableStateOf("")};var direction by remember {mutableStateOf("expense")};var parent by remember {mutableStateOf("")};var active by remember {mutableStateOf(true)};var choose by remember {mutableStateOf(false)}
     GlassSheet("收支分类",dismiss) {
-        ui.data.categories.forEach {c->TextButton(onClick={id=c.id;name=c.name;direction=c.direction;parent=c.parentId.orEmpty();active=c.active}) {Text(ledgerType(c.direction)+" · "+ui.data.categoryName(c.id)+(if(!c.active) " · 已停用" else ""))}}
+        GlassSelectField("管理分类",listOf("" to "新建分类")+ui.data.categories.map {it.id to (ledgerType(it.direction)+" · "+ui.data.categoryName(it.id)+(if(!it.active) " · 已停用" else ""))},id.orEmpty()) {key->
+            val category=ui.data.categories.find {it.id==key};id=category?.id;name=category?.name.orEmpty();direction=category?.direction ?: "expense";parent=category?.parentId.orEmpty();active=category?.active ?: true
+        }
         HorizontalDivider();Text(if(id==null) "新增分类" else "编辑分类",style=MaterialTheme.typography.titleMedium)
         LedgerField(name,{name=it},"分类名称");FlowChoices(listOf("expense" to "支出","income" to "收入"),direction) {direction=it;parent=""}
         LedgerSelectRow("父级",if(parent.isBlank()) "一级分类" else ui.data.categoryName(parent)) {choose=true}
-        Row(verticalAlignment=Alignment.CenterVertically) {Checkbox(active,{active=it});Text("在新增账目中显示")}
+        Row(verticalAlignment=Alignment.CenterVertically) {GlassCheckbox(active,{active=it});Text("在新增账目中显示")}
         Text("最多两层，账目记入叶子分类。停用保留历史；保护分类不能删除。",color=LocalGlass.current.muted,style=MaterialTheme.typography.bodySmall)
-        Button(enabled=!ui.busy,onClick={vm.run("分类已保存",onSuccess={id=null;name="";parent="";active=true}) {saveCategory(name,direction,parent.ifBlank {null},id,active)}},modifier=Modifier.fillMaxWidth()) {Text("保存分类")}
+        GlassButton(enabled=!ui.busy,onClick={vm.run("分类已保存",onSuccess={id=null;name="";parent="";active=true}) {saveCategory(name,direction,parent.ifBlank {null},id,active)}},modifier=Modifier.fillMaxWidth()) {Text("保存分类")}
         if(id!=null) TextButton(onClick={id=null;name="";parent="";active=true}) {Text("改为新增")}
     }
     if(choose) LedgerPicker("选择父级",listOf("" to "一级分类")+ui.data.categories.filter {it.parentId==null&&it.direction==direction&&it.id!=id&&!it.protected}.map {it.id to it.name},parent,{choose=false}) {parent=it;choose=false}
@@ -147,19 +180,6 @@ import java.time.*
     remove?.let {t->ConfirmDialog("删除模板",t.name,{remove=null},{vm.run("模板已删除") {removeTemplate(t.id)}})}
 }
 
-@Composable internal fun LedgerDrafts(ui:LedgerUi,vm:LedgerViewModel) {
-    var remove by remember {mutableStateOf<LedgerDraft?>(null)}
-    LazyColumn(Modifier.fillMaxSize(),contentPadding=PaddingValues(18.dp),verticalArrangement=Arrangement.spacedBy(12.dp)) {
-        if(ui.data.drafts.isEmpty()) item {LedgerEmpty("暂无记账草稿","未完成的输入会暂存在本机，不计入余额或统计。")}
-        items(ui.data.drafts,key={it.id}) {d->val f=runCatching {LedgerForm.parse(d.payload)}.getOrNull();GlassPanel(Modifier.fillMaxWidth()) {Column(Modifier.padding(16.dp)) {
-            Text((if(f?.kind=="claim") "报销申请" else f?.kind?.let(::ledgerType) ?: "账目")+" · "+(if(f?.kind=="claim") f.text("name") else f?.text("subject").orEmpty()).ifBlank {"未命名草稿"})
-            if(f?.kind=="claim") Text("未提交的申请与附件",color=LocalGlass.current.muted)
-            else Text(if(ui.hideAmounts) "••••" else f?.text("amount").orEmpty().ifBlank {"金额待填"},color=LocalGlass.current.muted)
-            Row {TextButton(onClick={vm.resume(d)}) {Text("继续填写")};TextButton(onClick={remove=d}) {Text("丢弃")}}
-        }}}
-    }
-    remove?.let {d->ConfirmDialog("丢弃草稿","仅删除未提交的输入及无其他引用的附件。",{remove=null},{vm.run("草稿已丢弃") {discard(d.id)}})}
-}
 @Composable internal fun LedgerTrash(ui:LedgerUi,vm:LedgerViewModel) {
     var remove by remember {mutableStateOf<LedgerTransaction?>(null)}
     LazyColumn(Modifier.fillMaxSize(),contentPadding=PaddingValues(18.dp),verticalArrangement=Arrangement.spacedBy(12.dp)) {

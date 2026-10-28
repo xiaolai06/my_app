@@ -6,8 +6,8 @@
 
 | 内容 | 位置 | 使用说明 |
 | --- | --- | --- |
-| 视频关键帧 | [总览](liquid-glass/video-contact-sheet.jpg)、`liquid-glass/video-frames/` | 对照材质与状态变化，不从视频推断已实现的渲染方式 |
-| Web 组件参考包 | [包内说明](liquid-glass/ui-atlas-kit/README.md) | 原样保留；HTML/CSS/JS 是 Web 样例，不是 Compose 业务代码 |
+| 视频关键帧 | 总览（本地资料，未入库：`liquid-glass/video-contact-sheet.jpg`）、`liquid-glass/video-frames/` | 对照材质与状态变化，不从视频推断已实现的渲染方式 |
+| Web 组件参考包 | 包内说明（本地资料，未入库：`liquid-glass/ui-atlas-kit/README.md`） | 原样保留；HTML/CSS/JS 是 Web 样例，不是 Compose 业务代码 |
 
 当前项目要求见 [文档索引](../docs/README.md)，研究解释见 [玻璃实现研究](../docs/research/安卓液态玻璃效果实现说明.md)。
 

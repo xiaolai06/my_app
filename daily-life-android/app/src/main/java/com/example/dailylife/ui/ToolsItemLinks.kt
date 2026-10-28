@@ -51,6 +51,6 @@ import com.example.dailylife.feature.tools.*
             ToolSwitch("同时用原账目金额与日期填写物品",importFacts) {importFacts=it}
             Text(if(importFacts) "确认后替换物品的这两项字段；原账目不变，物品使用状态不变。" else "仅建立引用，保留物品当前填写的金额与日期。",color=LocalGlass.current.muted)
         }
-        Button(enabled=!ui.busy && selected.isNotBlank(),onClick={vm.run(if(importFacts) "已确认带入并引用" else "已建立引用，物品事实保留",onSuccess=dismiss) {itemTransaction(item.id,role,selected,importFacts)}},modifier=Modifier.fillMaxWidth()) {Text(if(importFacts) "确认带入并引用" else "确认引用")}
+        GlassButton(enabled=!ui.busy && selected.isNotBlank(),onClick={vm.run(if(importFacts) "已确认带入并引用" else "已建立引用，物品事实保留",onSuccess=dismiss) {itemTransaction(item.id,role,selected,importFacts)}},modifier=Modifier.fillMaxWidth()) {Text(if(importFacts) "确认带入并引用" else "确认引用")}
     }
 }

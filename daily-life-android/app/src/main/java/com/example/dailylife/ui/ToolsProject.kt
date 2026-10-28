@@ -26,7 +26,7 @@ private fun projectSection(link:ToolLink,data:ToolsSnapshot):String=if(link.sect
     val visible=all.filter {section=="all" || projectSection(it,ui.data)==section}
     Row(Modifier.horizontalScroll(rememberScrollState()),horizontalArrangement=Arrangement.spacedBy(8.dp)) {(listOf("all" to "概览")+projectSections).forEach {(id,label)->GlassChoice(label,section==id) {section=id}}}
     if(project.deletedAt==null) Row(Modifier.horizontalScroll(rememberScrollState())) {
-        Button(onClick={creating=true},enabled=!ui.busy) {Text("新建并加入")}
+        GlassButton(onClick={creating=true},enabled=!ui.busy) {Text("新建并加入")}
         TextButton(onClick={choosing=true},enabled=!ui.busy) {Text("选择已有内容")}
     }
     if(visible.isEmpty()) ToolEmpty("这个分区还没有内容","创建新内容或关联原对象，修改来源内容会同步显示在这里。")
@@ -54,7 +54,7 @@ private fun projectSection(link:ToolLink,data:ToolsSnapshot):String=if(link.sect
     }
     if(choosing) ToolProjectSources(project,ui,ledger,plans,{choosing=false}) {type,id,targetSection->vm.run("已加入专题") {link(project.id,type,id,targetSection)}}
     if(creating) GlassSheet("新建并加入「"+project.title+"」",{creating=false}) {
-        Text("由原模块保存，同一次提交加入专题；未保存的草稿不会参与专题统计。",color=LocalGlass.current.muted)
+        Text("由原模块保存，同一次提交加入专题；未保存的内容不会参与专题统计。",color=LocalGlass.current.muted)
         listOf("note" to "记录","task" to "任务","event" to "日程","goal" to "目标","expense" to "支出").forEach {(kind,label)->TextButton(enabled=!ui.busy,onClick={creating=false;open("project_new",project.id+"|"+kind)},modifier=Modifier.fillMaxWidth()) {Text("新建"+label)}}
         HorizontalDivider()
         toolKinds.filter {it.first!="project"}.forEach {(kind,label)->TextButton(enabled=!ui.busy,onClick={creating=false;vm.begin(kind,projectId=project.id)},modifier=Modifier.fillMaxWidth()) {Text("新建"+label)}}

@@ -38,34 +38,55 @@ data class LedgerTransactionFilter(val query:String="",val type:String="all",val
     }
 }
 
-data class LedgerUi(val ready:Boolean=false,val data:LedgerSnapshot=LedgerSnapshot(),val records:RecordsSnapshot=RecordsSnapshot(),
+data class LedgerUi(val ready:Boolean=false,val loadError:String?=null,val data:LedgerSnapshot=LedgerSnapshot(),val records:RecordsSnapshot=RecordsSnapshot(),
     val busy:Boolean=false,val error:String?=null,val message:String?=null,val editor:LedgerForm?=null,val saved:Boolean=true,
     val detailId:String?=null,val page:String="overview",val ledgerId:String?=null,val month:String=YearMonth.now().toString(),
     val hideAmounts:Boolean=false,val csvHeaders:List<String> = emptyList(),val csvSample:List<List<String>> = emptyList(),val csvPending:Boolean=false,
     val restore:LedgerRestore?=null,val accountId:String?=null,val csvExport:LedgerCsvExport?=null,
-    val transactionFilter:LedgerTransactionFilter=LedgerTransactionFilter(),val accountFrom:String?=null,val accountTo:String?=null,val cashFrom:String?=null,val cashTo:String?=null)
+    val transactionFilter:LedgerTransactionFilter=LedgerTransactionFilter(),val accountFrom:String?=null,val accountTo:String?=null,val cashFrom:String?=null,val cashTo:String?=null,
+    val managementReturnPage:String="overview",val periodMode:String="month",val selectedDate:String=LocalDate.now().toString(),
+    val defaultPaymentChannel:String="")
 
 class LedgerViewModel(app:Application,private val state:SavedStateHandle):AndroidViewModel(app) {
     private val application=app as DailyLifeApplication
     val repository=application.ledger
     val files=application.records.files
-    private val _ui=MutableStateFlow(LedgerUi(page=state["ledgerPage"] ?: "overview",ledgerId=state["ledgerId"],month=state["ledgerMonth"] ?: YearMonth.now().toString(),accountId=state["ledgerAccount"],
+    private val _ui=MutableStateFlow(LedgerUi(page=state.get<String>("ledgerPage")?.takeUnless {it=="drafts"} ?: "overview",ledgerId=state["ledgerId"],month=state["ledgerMonth"] ?: YearMonth.now().toString(),accountId=state["ledgerAccount"],
         csvExport=state.get<String>("ledgerCsvExport")?.let {runCatching {LedgerCsvExport.parse(it)}.getOrNull()},
         transactionFilter=state.get<String>("ledgerFilter")?.let {runCatching {LedgerTransactionFilter.parse(it)}.getOrNull()} ?: LedgerTransactionFilter(),
-        accountFrom=state["ledgerAccountFrom"],accountTo=state["ledgerAccountTo"],cashFrom=state["ledgerCashFrom"],cashTo=state["ledgerCashTo"]))
+        accountFrom=state["ledgerAccountFrom"],accountTo=state["ledgerAccountTo"],cashFrom=state["ledgerCashFrom"],cashTo=state["ledgerCashTo"],
+        managementReturnPage=state["ledgerManagementReturn"] ?: "overview",
+        periodMode=state.get<String>("ledgerPeriodMode")?.takeIf {it in setOf("day","month")} ?: "month",
+        selectedDate=state.get<String>("ledgerDate")?.takeIf {runCatching {LocalDate.parse(it)}.isSuccess}
+            ?: state.get<String>("ledgerMonth")?.let {runCatching {YearMonth.parse(it).atDay(1).toString()}.getOrNull()} ?: LocalDate.now().toString()))
     val ui=_ui.asStateFlow()
     private var pending:Job?=null;private var saving:Job?=null;private var csvText:String?=null
     private val backups=LedgerBackup(application,repository)
+    private var loading:Job?=null
     init {
-        viewModelScope.launch {try {
-            repository.initialize()
-            state.get<String>("ledgerDraft")?.let {id->repository.load().drafts.find {it.id==id}?.let {d->val f=refreshSource(LedgerForm.parse(d.payload));_ui.update {it.copy(editor=f)}}}
-            repository.snapshot.collect {s->_ui.update {it.copy(ready=true,data=s,ledgerId=it.ledgerId?.takeIf {id->s.ledgers.any {l->l.id==id}} ?: s.defaultLedger()?.id)}}
-        } catch(e:Exception) {if(e is CancellationException) throw e;_ui.update {it.copy(error="账本读取失败："+e.message)}}}
-        viewModelScope.launch {application.records.snapshot.collect {s->_ui.update {it.copy(records=s)}}}
-        viewModelScope.launch {application.preferences.dashboard.collect {p->_ui.update {it.copy(hideAmounts=p.hideAmounts)}}}
+        retryLoad()
+        viewModelScope.launch {application.preferences.defaultPaymentChannel.retryWhen {e,attempt->
+            if(e is CancellationException) throw e
+            if(attempt<2) {delay(300L*(attempt+1));true} else false
+        }.catch {
+            _ui.update {it.copy(message="常用支付方式暂时无法读取，可在记账时自行选择")};emit("")
+        }.collect {value->_ui.update {it.copy(defaultPaymentChannel=value)}}}
     }
-    fun page(value:String) {state["ledgerPage"]=value;_ui.update {it.copy(page=value,detailId=null,error=null)}}
+    fun retryLoad() {
+        if(loading?.isActive==true) return
+        _ui.update {it.copy(loadError=null)}
+        loading=viewModelScope.launch {try {
+            repository.initialize()
+            if(_ui.value.editor==null) state.get<String>("ledgerDraft")?.let {id->repository.load().drafts.find {it.id==id}?.let {d->val f=refreshSource(LedgerForm.parse(d.payload));_ui.update {it.copy(editor=f)}}}
+            repository.snapshot.collect {s->_ui.update {it.copy(ready=true,data=s,ledgerId=it.ledgerId?.takeIf {id->s.ledgers.any {l->l.id==id}} ?: s.defaultLedger()?.id)}}
+        } catch(e:Exception) {if(e is CancellationException) throw e;_ui.update {it.copy(ready=false,loadError="账本读取失败："+e.message)}}}
+    }
+    fun page(value:String) {
+        val current=_ui.value
+        val returnPage=if(value=="manage"&&current.page in setOf("overview","transactions","stats","accounts")) current.page else current.managementReturnPage
+        state["ledgerManagementReturn"]=returnPage
+        state["ledgerPage"]=value;_ui.update {it.copy(page=value,detailId=null,error=null,managementReturnPage=returnPage)}
+    }
     fun selectLedger(id:String) {state["ledgerId"]=id;_ui.update {it.copy(ledgerId=id)}}
     fun openAccount(id:String) {
         if(id!=_ui.value.accountId) {state["ledgerAccountFrom"]=null;state["ledgerAccountTo"]=null;_ui.update {it.copy(accountFrom=null,accountTo=null)}}
@@ -75,7 +96,27 @@ class LedgerViewModel(app:Application,private val state:SavedStateHandle):Androi
     fun cashRange(from:String,to:String) {state["ledgerCashFrom"]=from;state["ledgerCashTo"]=to;_ui.update {it.copy(cashFrom=from,cashTo=to)}}
     fun filter(value:LedgerTransactionFilter) {state["ledgerFilter"]=value.json();_ui.update {it.copy(transactionFilter=value)}}
     fun configureCsv(value:LedgerCsvExport) {state["ledgerCsvExport"]=value.json();_ui.update {it.copy(csvExport=value)}}
-    fun month(value:String) {runCatching {YearMonth.parse(value)}.onSuccess {state["ledgerMonth"]=value;_ui.update {it.copy(month=value)}}}
+    fun month(value:String) {runCatching {YearMonth.parse(value)}.onSuccess {month->
+        val old=LocalDate.parse(_ui.value.selectedDate)
+        period("month",month.atDay(old.dayOfMonth.coerceAtMost(month.lengthOfMonth())).toString())
+    }}
+    fun day(value:String) {runCatching {LocalDate.parse(value)}.onSuccess {period("day",it.toString())}}
+    fun periodMode(value:String) {if(value in setOf("day","month")) period(value,_ui.value.selectedDate)}
+    fun stepPeriod(delta:Long) {
+        val current=_ui.value
+        val date=LocalDate.parse(current.selectedDate)
+        runCatching {if(current.periodMode=="day") date.plusDays(delta) else date.plusMonths(delta)}
+            .onSuccess {if(it.year in 1..9999) period(current.periodMode,it.toString())}
+    }
+    private fun period(mode:String,date:String) {
+        val filter=_ui.value.transactionFilter.copy(from="",to="")
+        state["ledgerDate"]=date;state["ledgerPeriodMode"]=mode;state["ledgerMonth"]=date.take(7);state["ledgerFilter"]=filter.json()
+        _ui.update {it.copy(selectedDate=date,periodMode=mode,month=date.take(7),transactionFilter=filter)}
+    }
+    fun setDefaultPaymentChannel(value:String)=run("常用支付方式已更新") {
+        application.preferences.setDefaultPaymentChannel(value)
+        _ui.update {it.copy(defaultPaymentChannel=value)}
+    }
     fun detail(id:String?) {_ui.update {it.copy(detailId=id,error=null)}}
     fun clearError() {_ui.update {it.copy(error=null)}}
     fun clearMessage() {_ui.update {it.copy(message=null)}}
@@ -101,35 +142,44 @@ class LedgerViewModel(app:Application,private val state:SavedStateHandle):Androi
         }
     }
     fun begin(kind:String="expense",id:String?=null,original:String?=null,claim:String?=null,template:TransactionTemplate?=null,amount:String?=null,projectId:String?=null)=run(null) {
-        saving?.cancelAndJoin()
+        flush()
         val existing=id?.let {v->load().drafts.find {it.id==v}}
         var f=if(existing!=null) LedgerForm.parse(existing.payload) else if(id!=null) form(id) else if(template!=null) {
             val source=LedgerForm.parse(template.payload);source.copy(id=newId(),revision=0).set("date",LocalDate.now().toString())
         } else LedgerForm(kind).set("ledger",_ui.value.ledgerId ?: load().defaultLedger()?.id.orEmpty()).set("date",LocalDate.now().toString())
-        original?.let {f=f.set("original",it)};claim?.let {f=f.set("claim",it)};amount?.let {f=f.set("amount",it)};projectId?.let {f=f.set("project",it)}
-        f=refreshSource(f)
-        prepareDraft(f);state["ledgerDraft"]=f.id;_ui.update {it.copy(editor=f,saved=true)}
+        if(existing==null) {
+            original?.let {f=f.set("original",it)};claim?.let {f=f.set("claim",it)};amount?.let {f=f.set("amount",it)};projectId?.let {f=f.set("project",it)}
+        }
+        if(id==null && template==null && kind in setOf("expense","income")) {
+            f=f.set("channel",_ui.value.defaultPaymentChannel)
+        }
+        f=refreshSource(prepareDraft(f));state["ledgerDraft"]=f.id;_ui.update {it.copy(editor=f,saved=true)}
     }
     fun beginClaim(id:String?=null)=run(null) {
-        saving?.cancelAndJoin()
+        flush()
         val existing=id?.let {value->load().drafts.find {it.id==value}}
-        val f=existing?.let {LedgerForm.parse(it.payload)} ?: if(id!=null) claimForm(id) else LedgerForm("claim")
+        var f=existing?.let {LedgerForm.parse(it.payload)} ?: if(id!=null) claimForm(id) else LedgerForm("claim")
             .set("ledger",_ui.value.ledgerId ?: load().defaultLedger()?.id.orEmpty()).set("allocations","{}")
         require(f.kind=="claim") {"请从报销申请重新打开"}
-        prepareDraft(f);state["ledgerDraft"]=f.id;state["ledgerPage"]="claims"
+        f=prepareDraft(f);state["ledgerDraft"]=f.id;state["ledgerPage"]="claims"
         _ui.update {it.copy(editor=f,page="claims",saved=true)}
     }
     fun edit(f:LedgerForm) {
-        if(_ui.value.busy) return
+        if(_ui.value.busy || pending?.isActive==true) return
         _ui.update {it.copy(editor=f,saved=false,error=null)};saving?.cancel()
         saving=viewModelScope.launch {delay(450);try {repository.draft(f);_ui.update {if(it.editor==f) it.copy(saved=true) else it}}
-            catch(e:Exception) {if(e is CancellationException) throw e;_ui.update {it.copy(error="草稿暂存失败："+e.message)}}}
+            catch(e:Exception) {if(e is CancellationException) throw e;_ui.update {it.copy(error="编辑保护未完成："+e.message)}}}
     }
     private suspend fun flush() {saving?.cancelAndJoin();_ui.value.editor?.let {repository.draft(it)}}
+    fun leaveEditor()=run("未完成内容已保留，可在“我的”继续") {
+        flush();state["ledgerDraft"]=null;_ui.update {it.copy(editor=null,error=null,saved=true)}
+    }
     fun save(keepAdding:Boolean=false,allowWarnings:Boolean=false)=run("已保存到本机") {
         flush();val f=_ui.value.editor ?: return@run
         val id=save(f,allowWarnings);state["ledgerDraft"]=null
-        if(keepAdding) {val fresh=LedgerForm(f.kind).set("ledger",f.text("ledger")).set("date",LocalDate.now().toString());prepareDraft(fresh);state["ledgerDraft"]=fresh.id;_ui.update {it.copy(editor=fresh,saved=true)}}
+        if(keepAdding) {var fresh=LedgerForm(f.kind).set("ledger",f.text("ledger")).set("date",LocalDate.now().toString())
+            if(f.kind in setOf("expense","income")) fresh=fresh.set("channel",_ui.value.defaultPaymentChannel)
+            prepareDraft(fresh);state["ledgerDraft"]=fresh.id;_ui.update {it.copy(editor=fresh,saved=true)}}
         else _ui.update {it.copy(editor=null,detailId=id,saved=true)}
     }
     fun saveClaimDraft()=run("报销申请已保存") {
@@ -137,22 +187,31 @@ class LedgerViewModel(app:Application,private val state:SavedStateHandle):Androi
         saveClaimFromDraft(f);state["ledgerDraft"]=null;state["ledgerPage"]="claims"
         _ui.update {it.copy(editor=null,detailId=null,page="claims",saved=true)}
     }
-    fun keep()=run("草稿已保留") {flush();state["ledgerDraft"]=null;_ui.update {it.copy(editor=null)}}
-    fun discardEditor()=run("草稿已丢弃") {saving?.cancelAndJoin();_ui.value.editor?.let {discard(it.id)};state["ledgerDraft"]=null;_ui.update {it.copy(editor=null)}}
-    fun resume(d:LedgerDraft)=run(null) {val f=refreshSource(LedgerForm.parse(d.payload));state["ledgerDraft"]=f.id;_ui.update {it.copy(editor=f,saved=true)}}
-    fun duplicate(t:LedgerTransaction)=run("已复制为新草稿，请确认日期和金额") {
+    fun discardEditor()=run("已放弃本次编辑") {saving?.cancelAndJoin();_ui.value.editor?.let {discard(it.id)};state["ledgerDraft"]=null;_ui.update {it.copy(editor=null)}}
+    fun resume(d:LedgerDraft)=run(null) {
+        flush()
+        val current=dao.drafts().firstOrNull {it.id==d.id} ?: error("未完成编辑已保存或删除，请刷新列表")
+        val f=refreshSource(LedgerForm.parse(current.payload));state["ledgerDraft"]=f.id;_ui.update {it.copy(editor=f,saved=true)}
+    }
+    fun duplicate(t:LedgerTransaction)=run("已复制，请保存新内容，请确认日期和金额") {
+        flush()
         val source=form(t.id);val f=source.copy(id=newId(),revision=0).set("date",LocalDate.now().toString()).set("original","").set("claim","").set("fee","").set("linkedSource","").set("contextSource","").set("project","")
         require(f.kind in setOf("expense","income","transfer")) {"退款、回款和余额校准不能复制成普通账目"}
         prepareDraft(f);state["ledgerDraft"]=f.id;_ui.update {it.copy(editor=f,saved=true)}
     }
-    fun importFiles(uris:List<Uri>) {viewModelScope.launch {pending?.join();run("附件已导入草稿") {flush();val id=_ui.value.editor?.id ?: error("请先打开编辑页");uris.forEach {importFile(id,it)}}}}
+    fun importFiles(uris:List<Uri>) {viewModelScope.launch {pending?.join();run("附件已加入当前编辑") {flush();val id=_ui.value.editor?.id ?: error("请先打开编辑页");uris.forEach {importFile(id,it)}}}}
     fun exportBackup(uri:Uri) {viewModelScope.launch {pending?.join();run("账本与附件备份已导出") {backups.export(uri)}}}
     fun prepareRestore(uri:Uri) {viewModelScope.launch {pending?.join();run(null) {
-        _ui.value.restore?.let {backups.discard(it)};val preview=backups.prepare(uri);_ui.update {it.copy(restore=preview)}
+        withContext(Dispatchers.IO) {backups.discardAll()};_ui.update {it.copy(restore=null)}
+        val preview=backups.prepare(uri);_ui.update {it.copy(restore=preview)}
     }}}
-    fun dismissRestore() {if(!_ui.value.busy) {_ui.value.restore?.let {backups.discard(it)};_ui.update {it.copy(restore=null)}}}
+    fun dismissRestore()=run(null) {withContext(Dispatchers.IO) {backups.discardAll()};_ui.update {it.copy(restore=null)}}
+    override fun onCleared() {
+        super.onCleared()
+        application.backgroundScope.launch {pending?.join();runCatching {backups.discardAll()}}
+    }
     fun restoreBackup()=run("账本备份已追加恢复；已有编号保留本机版本") {
-        val p=_ui.value.restore ?: error("请先选择备份");backups.restore(p);backups.discard(p);_ui.update {it.copy(restore=null)}
+        val p=_ui.value.restore ?: error("请先选择备份");backups.restore(p);withContext(Dispatchers.IO) {backups.discard(p)};_ui.update {it.copy(restore=null)}
     }
     fun prepareCsv(uri:Uri) {viewModelScope.launch {pending?.join();run(null) {
         val text=withContext(Dispatchers.IO) {application.contentResolver.openInputStream(uri)?.use {s->

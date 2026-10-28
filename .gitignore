@@ -21,6 +21,8 @@ Thumbs.db
 **/signing.properties
 private-data/
 release-output/
+android-setup/
+AndroidEnvironmentCheck/
 *.apk
 *.aab
 *.hprof

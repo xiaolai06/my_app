@@ -31,7 +31,8 @@ data class Record(
     @PrimaryKey val id: String, val ownerId: String, val kind: String, val typeId: String,
     val title: String = "", val folderId: String? = null, val organizationStatus: String = "inbox",
     val pinOrder: Long? = null, val archivedAt: Long? = null, val deletedAt: Long? = null,
-    val createdAt: Long, val updatedAt: Long, val revision: Long = 1
+    val createdAt: Long, val updatedAt: Long, val revision: Long = 1,
+    @ColumnInfo(defaultValue = "'{}'") val presentation: String = "{}"
 )
 @Entity(tableName = "notes", foreignKeys = [ForeignKey(entity = Record::class,
     parentColumns = ["id"], childColumns = ["recordId"], onDelete = ForeignKey.CASCADE)])

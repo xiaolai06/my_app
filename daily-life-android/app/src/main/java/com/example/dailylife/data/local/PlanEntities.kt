@@ -81,4 +81,5 @@ data class PlanDraft(@PrimaryKey val id: String, val kind: String, val payload: 
 @Entity(tableName = "plan_reminders", indices = [Index(value = ["sourceType", "sourceId", "instanceKey"], unique = true)])
 data class PlanReminder(@PrimaryKey(autoGenerate = true) val id: Long = 0, val sourceType: String,
     val sourceId: String, val instanceKey: String, val title: String, val triggerAt: Long,
-    val state: String = "pending", val postedAt: Long? = null, val readAt: Long? = null)
+    val state: String = "pending", val postedAt: Long? = null, val readAt: Long? = null,
+    val deferredUntil: Long? = null)

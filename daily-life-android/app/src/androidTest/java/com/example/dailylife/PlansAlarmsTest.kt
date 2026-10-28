@@ -8,6 +8,45 @@ import org.junit.Assert.*
 import java.time.LocalDate
 /** Uses the real app snapshot. An explicit test-only argument may grant notification permission on the disposable AVD. */
 class PlansAlarmsTest {
+    @Test fun delayedAlarmsRespectPermissionAndNeverEraseDeliveryHistory()=runBlocking {
+        val app=ApplicationProvider.getApplicationContext<DailyLifeApplication>()
+        if(InstrumentationRegistry.getArguments().getString("expectedNotifications")=="true" && android.os.Build.VERSION.SDK_INT>=33)
+            InstrumentationRegistry.getInstrumentation().uiAutomation.grantRuntimePermission(app.packageName,android.Manifest.permission.POST_NOTIFICATIONS)
+        app.plans.initialize();app.tools.initialize()
+        var now=System.currentTimeMillis()
+        val alarms=com.example.dailylife.data.repository.PlanAlarms(app,app.plans) {now}
+        for(delayMinutes in listOf(20,60)) {
+            val form=PlanForm("task").set("title","延迟提醒回归 $delayMinutes")
+            try {
+                app.plans.prepareDraft(form);app.plans.save(form)
+                val trigger=now+600000
+                app.plans.dao.put(app.plans.dao.tasks().first {it.id==form.id}.copy(reminderAt=trigger,reminderMinutes=null))
+                alarms.reconcile()
+                val job=app.plans.dao.reminders().single {it.sourceId==form.id}
+                now=trigger+delayMinutes*60000L
+                alarms.deliver(job.id)
+                val delivered=app.plans.dao.reminders().first {it.id==job.id}
+                assertEquals(if(alarms.enabled()) "posted" else "blocked",delivered.state)
+                assertEquals(if(alarms.enabled()) now else null,delivered.postedAt)
+                alarms.deliver(job.id)
+                assertEquals(delivered.postedAt,app.plans.dao.reminders().first {it.id==job.id}.postedAt)
+                if(delivered.postedAt!=null) {
+                    app.plans.readReminder(job.id)
+                    val read=app.plans.dao.reminders().first {it.id==job.id}.readAt
+                    now=trigger-1000;alarms.reconcile()
+                    val preserved=app.plans.dao.reminders().first {it.id==job.id}
+                    assertEquals(delivered.postedAt,preserved.postedAt);assertEquals(read,preserved.readAt)
+                }
+                app.plans.taskAction(TaskRow(app.plans.dao.tasks().first {it.id==form.id}),"done")
+                alarms.reconcile()
+            } finally {
+                app.plans.discard(form.id)
+                if(app.plans.dao.tasks().any {it.id==form.id}) {app.plans.manage("task",form.id,"trash");app.plans.permanentlyDelete("task",form.id)}
+                alarms.reconcile()
+                app.plans.db.openHelper.writableDatabase.execSQL("DELETE FROM plan_reminders WHERE sourceId=?",arrayOf(form.id))
+            }
+        }
+    }
     @Test fun toolReminderUsesCurrentPermissionAndSourceCancellation()=runBlocking {
         val app=ApplicationProvider.getApplicationContext<DailyLifeApplication>()
         if(InstrumentationRegistry.getArguments().getString("expectedNotifications")=="true" && android.os.Build.VERSION.SDK_INT>=33) InstrumentationRegistry.getInstrumentation().uiAutomation.grantRuntimePermission(app.packageName,android.Manifest.permission.POST_NOTIFICATIONS)

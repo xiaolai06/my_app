@@ -30,6 +30,8 @@ class MainActivity : ComponentActivity() {
     private lateinit var tools:ToolsViewModel
     private lateinit var home:HomeViewModel
     private var incoming by mutableStateOf<Intent?>(null)
+    override fun onStart() {super.onStart();plans.setVisible(true)}
+    override fun onStop() {plans.setVisible(false);super.onStop()}
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
@@ -69,6 +71,7 @@ class MainActivity : ComponentActivity() {
             val ledgerRestore=rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) {it?.let {ledger.prepareRestore(it)}}
             val csvExport=rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("text/csv")) {it?.let {ledger.exportCsv(it)}}
             val csvImport=rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) {it?.let {ledger.prepareCsv(it)}}
+            val toolPictures=rememberLauncherForActivityResult(ActivityResultContracts.PickMultipleVisualMedia(50)) {tools.importFiles(it,imagesOnly=true)}
             val toolFiles=rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) {tools.importFiles(it)}
             val toolBackup=rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/zip")) {it?.let {tools.backup(it)}}
             val toolRestore=rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) {it?.let {tools.prepareRestore(it)}}
@@ -134,14 +137,20 @@ class MainActivity : ComponentActivity() {
                 }
                 CompositionLocalProvider(LocalUriHandler provides webLinks) {
                 LaunchedEffect(homeError) {homeError?.let {model.message(it);home.clearError()}}
-                DailyApp(ui, model, planUi, plans,ledgerUi,ledger,toolsUi,tools,homeUi,home::update,
-                    requestNotifications={if(android.os.Build.VERSION.SDK_INT>=33) notifications.launch(android.Manifest.permission.POST_NOTIFICATIONS) else runCatching {startActivity(Intent(android.provider.Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(android.provider.Settings.EXTRA_APP_PACKAGE,packageName))}.onFailure {model.message("无法打开系统通知设置")}},
-                    addLedgerFiles={ledgerFiles.launch(arrayOf("*/*"))},backupLedger={ledgerBackup.launch("日常账本-"+java.time.LocalDate.now()+".zip")},restoreLedger={ledgerRestore.launch(arrayOf("application/zip","application/octet-stream"))},
-                    exportCsv={csvExport.launch("日常账目-"+ledgerUi.month+".csv")},importCsv={csvImport.launch(arrayOf("text/*","application/octet-stream","application/vnd.ms-excel"))},
-                    addToolFiles={toolFiles.launch(arrayOf("*/*"))},backupTools={toolBackup.launch("日常功能箱-"+java.time.LocalDate.now()+".zip")},restoreTools={toolRestore.launch(arrayOf("application/zip","application/octet-stream"))},
+                DailyApp(ui, model, planUi, plans,ledgerUi.copy(records=ui.snapshot,hideAmounts=false),ledger,
+                    toolsUi.copy(records=ui.snapshot,hideAmounts=homeUi.hideAmounts),tools,homeUi,home,home::update,
+                    requestNotifications={
+                        if(android.os.Build.VERSION.SDK_INT>=33 && androidx.core.content.ContextCompat.checkSelfPermission(this,android.Manifest.permission.POST_NOTIFICATIONS)!=android.content.pm.PackageManager.PERMISSION_GRANTED)
+                            notifications.launch(android.Manifest.permission.POST_NOTIFICATIONS)
+                        else runCatching {startActivity(Intent(android.provider.Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(android.provider.Settings.EXTRA_APP_PACKAGE,packageName))}.onFailure {model.message("无法打开系统通知设置")}
+                    },
+                    addLedgerFiles={ledgerFiles.launch(arrayOf("*/*"))},backupLedger={ledgerBackup.launch("My Life-账本-"+java.time.LocalDate.now()+".zip")},restoreLedger={ledgerRestore.launch(arrayOf("application/zip","application/octet-stream"))},
+                    exportCsv={csvExport.launch("My Life-账目-"+java.time.LocalDate.now()+".csv")},importCsv={csvImport.launch(arrayOf("text/*","application/octet-stream","application/vnd.ms-excel"))},
+                    addToolPictures={toolPictures.launch(androidx.activity.result.PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))},
+                    addToolFiles={toolFiles.launch(arrayOf("*/*"))},backupTools={toolBackup.launch("My Life-工具-"+java.time.LocalDate.now()+".zip")},restoreTools={toolRestore.launch(arrayOf("application/zip","application/octet-stream"))},
                     addPlanFiles={planFiles.launch(arrayOf("*/*"))},
-                    backupPlans={planBackup.launch("日常计划-"+java.time.LocalDate.now()+".zip")},restorePlans={planRestore.launch(arrayOf("application/zip","application/octet-stream"))},
-                    backupRecords = { backup.launch("日常记录-" + java.time.LocalDate.now() + ".zip") },
+                    backupPlans={planBackup.launch("My Life-计划-"+java.time.LocalDate.now()+".zip")},restorePlans={planRestore.launch(arrayOf("application/zip","application/octet-stream"))},
+                    backupRecords = { backup.launch("My Life-记录-" + java.time.LocalDate.now() + ".zip") },
                     restoreRecords = { restore.launch(arrayOf("application/zip", "application/octet-stream")) },
                     addPictures = { pictures.launch(arrayOf("image/*")) },
                     addFiles = { files.launch(arrayOf("*/*")) },

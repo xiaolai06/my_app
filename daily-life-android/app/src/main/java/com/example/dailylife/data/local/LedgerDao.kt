@@ -36,6 +36,10 @@ import kotlinx.coroutines.flow.Flow
     @Query("DELETE FROM ledger_drafts WHERE id=:id") suspend fun removeDraft(id:String)
     @Query("DELETE FROM reimbursement_items WHERE claimId=:id") suspend fun clearItems(id:String)
     @Query("DELETE FROM monthly_budgets WHERE id=:id") suspend fun removeBudget(id:String)
+    @Query("DELETE FROM budget_alerts WHERE budgetId=:id") suspend fun clearBudgetAlerts(id:String)
+    @Query("DELETE FROM budget_alerts WHERE budgetId NOT IN (SELECT id FROM monthly_budgets)") suspend fun removeOrphanBudgetAlerts()
+    @Query("UPDATE ledger_import_rows SET transactionId=NULL, result='deleted' WHERE transactionId IS NOT NULL AND transactionId NOT IN (SELECT id FROM ledger_transactions)") suspend fun repairDeletedImportRows()
+    @Query("UPDATE ledger_import_rows SET transactionId=NULL, result='deleted' WHERE transactionId=:id") suspend fun detachDeletedImport(id:String)
     @Query("DELETE FROM transaction_templates WHERE id=:id") suspend fun removeTemplate(id:String)
     @Query("DELETE FROM ledger_transactions WHERE id=:id") suspend fun removeTransaction(id:String)
 }

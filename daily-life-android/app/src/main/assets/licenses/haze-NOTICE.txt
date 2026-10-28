@@ -1,0 +1,5 @@
+Haze 1.6.10
+Copyright Christopher Banes and the Haze project contributors.
+Source: https://github.com/chrisbanes/haze/tree/1.6.10
+License: Apache License 2.0, included as haze-Apache-2.0.txt.
+This app links the published library without modifying its sources.
